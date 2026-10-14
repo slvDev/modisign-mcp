@@ -1,0 +1,13 @@
+Modisign MCP
+Copyright (c) 2026 Viacheslav Sierbov
+
+Third-party notices
+
+HyperFrames and the MCP TypeScript SDK are Apache-2.0 licensed; dependencies
+retain their own licenses and notices. FFmpeg and Chrome binaries are not
+distributed. Fetched compositions, fonts and other assets keep their own
+terms and are not covered by this MIT license. Modisign service terms:
+https://modisign.app/terms
+
+The bundled Montserrat, Lora and Roboto Mono fonts are licensed under SIL Open
+Font License 1.1; see the matching dist/studio/*-OFL.txt files. The bundled ONNX runtime retains its MIT license.

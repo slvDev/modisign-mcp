@@ -1,0 +1,50 @@
+{
+  "name": "@modisign/mcp",
+  "version": "0.1.1",
+  "mcpName": "io.github.slvDev/modisign",
+  "description": "Discover and render Modisign animated overlays locally through MCP",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "modisign-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "skills"
+  ],
+  "author": "Viacheslav Sierbov",
+  "homepage": "https://modisign.app/mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/slvDev/modisign-mcp"
+  },
+  "bugs": "https://github.com/slvDev/modisign-mcp/issues",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "hyperframes": "0.8.80",
+    "mediabunny": "1.61.0",
+    "puppeteer-core": "25.13.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/node": "22.19.15",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3",
+    "@huggingface/transformers": "3.8.1",
+    "html-to-image": "1.11.13",
+    "react": "19.2.8",
+    "@types/react": "19.3.0",
+    "onnxruntime-common": "1.22.0-dev.20250409-89f8206ba4"
+  }
+}
