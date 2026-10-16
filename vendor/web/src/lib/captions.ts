@@ -53,10 +53,11 @@ export function captionStyle(id: CaptionStyleId) {
 export function captionDisplayText(text: string, casing: CaptionStyle["casing"]) {
   return casing === "upper" ? text.toUpperCase() : casing === "lower" ? text.toLowerCase() : text;
 }
-export function timelineWords(clips: { id: string; mediaId: string | null; duration: number; transition?: TimingClip["transition"]; kind?: "video" | "photo"; inPoint: number; outPoint: number }[], transcripts: Record<string, CaptionWord[]>): TimelineWord[] {
+export function timelineWords(clips: (TimingClip & { id: string; mediaId: string | null; kind: "video" | "photo"; inPoint: number; outPoint: number })[], transcripts: Record<string, CaptionWord[]>): TimelineWord[] {
   const result: TimelineWord[] = [];
   const starts = clipStarts(clips);
   for (const [index, clip] of clips.entries()) {
+    if (clip.track !== "v1") continue;
     const offset = starts[index];
     const transition = cutTransition(clips, index);
     const endPoint = clip.outPoint - (transition !== undefined && transition.type === "crossfade" ? transition.duration : 0);

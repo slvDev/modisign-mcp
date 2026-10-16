@@ -27,7 +27,7 @@ Ask your assistant: “Find a free career overlay, export it as green-screen MP4
 | `configure_overlay` | Apply settings; return configuration URL and free/Pro tier |
 | `render_overlay` | Start MP4, MOV or WebM export |
 | `add_overlay_to_video` | Composite at a start time onto one local video up to 60 seconds |
-| `edit_video` | Export a Studio sequence with trims, photos, pauses removed, transitions, overlays and English captions |
+| `edit_video` | Export a Studio sequence with two tracks, crop/place, trims, photos, pauses removed, transitions, overlays and English captions |
 | `get_transcript` | Return locally generated English transcript lines and source times to your assistant for review |
 | `job_status` | Read state, progress, file details and warnings |
 | `cancel_job` | Cancel and clean temporary files |
@@ -42,14 +42,16 @@ Ask “Cut these three local clips into a 9:16 Reel, remove pauses, add Clean ca
 
 ### Studio limits and settings
 
-`edit_video` uses the website's Studio engine in the local render browser. It accepts 1–300 video/photo clips and at most 180 seconds after crossfade overlap. Video sources are at most 180 seconds; trims retain at least 0.2 seconds. JPEG/PNG/WebP/AVIF photos default to 3 seconds and allow 0.5–30 seconds (`out - in`); HEIC is rejected.
+`edit_video` uses the website's Studio engine in the local render browser. It accepts 1–300 video/photo clips across both tracks; the maximum end of either track must be at most 180 seconds after V1 crossfade overlap. Video sources are at most 180 seconds; trims retain at least 0.2 seconds. JPEG/PNG/WebP/AVIF photos default to 3 seconds and allow 0.5–30 seconds (`out - in`); HEIC is rejected.
 
+- Tracks: every clip requires `track: "v1"` or `"v2"`. V1 retains request order and forbids `start`; V2 requires finite nonnegative timeline `start` seconds and nonoverlapping intervals. Interspersed requests become V1 sequence then V2 sorted by start, retaining original clip/media ids. V2 can stand alone or extend output; gaps are black. Sources end naturally without looping or freezing. Align starts manually; no automatic sync or clock-drift correction.
+- Crop/Place: optional creation fields use shared project types/validators, never a second validator. Omission constructs zero crop / Full once; internal documents always contain both. `crop` is exact `{top,right,bottom,left}` in oriented-source percentages, each finite 0–95; opposite edges sum to at most 95. `place` is exact `{mode}` with full/top/bottom/left/right/pip-top-left/pip-top-right/pip-bottom-left/pip-bottom-right, or `{mode:"custom",x,y,width,height}` in normalized output coordinates, contained in output with dimensions at least 0.05. Halves fill the corresponding output half; corner boxes are 0.30 × 0.30 with 0.03 margins. Geometry crops the source before Fill/Fit and clamps pan against the retained source and destination box. Invalid/unknown fields, impossible crop, rectangles, overlaps, trims and maximum end return field errors before enqueue.
 - Framing: `fit` is `fill` or `fit`, `zoom` is 1–3, and `pan_x`/`pan_y` are normalized centres (0–1). `slow_zoom` belongs to photos; volume/mute/fades belong to videos.
 - Punch-ins: source-second starts, lengths 0.5–4 seconds in 0.1 steps, zoom 110/125/140, at most 50 nonoverlapping rows per clip.
-- Transitions: zero-based `after_clip`; 0.2–1 second crossfades or dips, clamped by Studio's adjacent-clip rules.
-- Silence removal: gentle/normal/strong sensitivity and 0.3/0.5/1 second shortest pause; removal ripples overlay starts with footage. Starts must initially fit overlays within the sequence.
+- Transitions: `after_clip` is a zero-based index into the original request clips array. It must name a V1 clip with a next V1 clip, skipping interspersed V2 entries. Duplicate cuts and V2 targets fail. Crossfades/dips use 0.2–1 seconds, clamped by Studio's adjacent-V1 rules.
+- Silence removal: gentle/normal/strong sensitivity and 0.3/0.5/1 second shortest pause, detected from V1 video audio only. Shared synchronized removal cuts/ripples both tracks and overlay starts, subtracting overlapping ranges once. With V2 present, transition windows/repairs that cannot preserve alignment return an explicit error naming the V1 transition to remove before retrying; no output is written. Starts must initially fit overlays within the sequence.
 - Output: `9x16`, `4x5`, `1x1`, `16x9`; free quality choices are 1080p (default) or 720p.
-- Captions: one of thirteen styles (free/Pro lists below), position `upper`/`center`/`lower` and size `s`/`m`/`l`. Optional `corrections: [{from, to}]` replace case-insensitive words/phrases while retaining source timing. `get_transcript` returns source-relative times, including an optional trim's offset.
+- Captions: V1 speech only, even if muted; V2/reference speech never transcribes. One of thirteen styles (free/Pro lists below), position `upper`/`center`/`lower` and size `s`/`m`/`l`. Optional `corrections: [{from, to}]` replace case-insensitive words/phrases while retaining source timing. `get_transcript` returns source-relative times, including an optional trim's offset.
 
 Files default to `~/Movies/Modisign` on macOS and `~/Videos/Modisign` elsewhere. Existing files are preserved: collisions append `-2`, `-3`, etc. Provide absolute local paths for media and custom outputs. No arbitrary HTML or commands are accepted.
 
@@ -80,7 +82,7 @@ Every render attempts the website's authorization endpoint, again when its queue
 
 ### Data flow
 
-Video, photos, audio, transcripts and local paths are never sent to Modisign. Calling `get_transcript` returns transcript text to your assistant/provider; otherwise generated captions stay in process/browser memory. Your assistant provider sees tool arguments/results. Overlay configurations, including typed overlay text, and Studio's caption style reach Modisign for validation and authorization.
+Video, photos, audio, transcripts, local paths and clip track/start/crop/place are never sent to Modisign. Studio authorization remains exactly `{kind:"studio",configurations,captionStyle}`; usage remains only free/kind/outcome, without a family or layout data. Calling `get_transcript` returns transcript text to your assistant/provider; otherwise generated captions stay in process/browser memory. Your assistant provider sees tool arguments/results. Overlay configurations, including typed overlay text, and Studio's caption style reach Modisign for validation and authorization.
 
 The package downloads only first-party compositions and their approved runtime, animation and font dependencies, then localizes them. English Whisper tiny.en's pinned model downloads from Hugging Face once (~43 MB), through the Node host into the local cache. The render browser only receives loopback URLs.
 

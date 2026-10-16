@@ -10,7 +10,8 @@ export type ClipSilence = SilenceRange & { clipId: string; newId: string };
 
 const yieldThread = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-export async function detectClipSilences(levels: readonly number[] | null, clip: { id: string; inPoint: number; outPoint: number }, timelineStart: number, sensitivity: SilenceSensitivity, shortestPause: number, signal: AbortSignal) {
+export async function detectClipSilences(levels: readonly number[] | null, clip: { track: "v1" | "v2"; kind: "video" | "photo"; id: string; inPoint: number; outPoint: number }, timelineStart: number, sensitivity: SilenceSensitivity, shortestPause: number, signal: AbortSignal) {
+  if (clip.track !== "v1" || clip.kind !== "video") return [];
   const ranges = await detectSilences(levels, clip.inPoint, clip.outPoint, sensitivity, shortestPause, signal);
   return ranges.map((range) => ({ ...range, clipId: clip.id, timelineStart: timelineStart + range.start - clip.inPoint }));
 }

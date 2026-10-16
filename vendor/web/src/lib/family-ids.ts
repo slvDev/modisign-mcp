@@ -3,6 +3,8 @@ export const FAMILY_IDS = [
   "hook-title",
   "yt-subscribe",
   "follow-button",
+  "ig-follow",
+  "tt-follow",
   "lower-third",
   "comment-cta",
   "step-title",

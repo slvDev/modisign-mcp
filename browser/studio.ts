@@ -5,10 +5,11 @@ import { captionTranscriber, speechPcm } from "../vendor/web/src/lib/captions-as
 import { captionLines, timelineWords } from "../vendor/web/src/lib/captions";
 import { createSilenceLevels, detectClipSilences } from "../vendor/web/src/lib/studio-silences";
 import { studioReducer, type StudioMedia, type StudioOverlay } from "../vendor/web/src/lib/studio-state";
-import { studioTimeline } from "../vendor/web/src/lib/studio-projections";
-import { clipStarts, studioSize, timelineDuration } from "../vendor/web/src/lib/video-timeline";
+import { mediaById, studioTimeline } from "../vendor/web/src/lib/studio-projections";
+import { sourceOrigin, clipStarts, studioSize, timelineDuration } from "../vendor/web/src/lib/video-timeline";
 import { exportVideoTimeline } from "../vendor/web/src/lib/timeline-export";
 import { correctTranscript, editDocument, type EditInput } from "../src/studio-request";
+import { ToolError } from "../src/errors";
 
 type BrowserRequest = { input: EditInput; media: { url: string; name: string; type: string; kind: "video" | "photo" }[]; overlays: { src: string; overlay: StudioOverlay }[]; transcriptOnly: boolean };
 declare global { interface Window {
@@ -31,9 +32,10 @@ window.runStudio = async (request) => {
       media.push({ ...loaded, id: `media-${index}`, poster: "", filmstrip: [], waveform: null, silenceLevels: null });
     }
     let state = editDocument(request.input, media);
+    const warnings: string[] = [];
     state.overlays = request.overlays.map((item) => item.overlay);
     for (const item of media) {
-      if (item.kind === "photo") continue;
+      if (item.kind === "photo" || !state.clips.some((clip) => clip.track === "v1" && clip.mediaId === item.id)) continue;
       if (worker !== null) {
         const pcm = await speechPcm(item.source.file, item.source.duration, signal);
         if (pcm !== null) {
@@ -50,7 +52,7 @@ window.runStudio = async (request) => {
           if (video === null) throw new Error("Video picture is unavailable");
           if (audio !== null) {
             if (!(await audio.canDecode())) throw new Error("This browser cannot decode clip audio");
-            const origin = Math.max(0, Math.min(await video.getFirstTimestamp(), await audio.getFirstTimestamp()));
+            const origin = sourceOrigin(await video.getFirstTimestamp(), await audio.getFirstTimestamp());
             const levels = createSilenceLevels(item.source.duration);
             for await (const { buffer, timestamp } of new AudioBufferSink(audio).buffers()) {
               await levels.add(Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel)), buffer.sampleRate, timestamp - origin, signal);
@@ -68,12 +70,17 @@ window.runStudio = async (request) => {
     if (request.input.remove_silences !== undefined) {
       const { sensitivity, shortest_pause } = request.input.remove_silences;
       const starts = clipStarts(state.clips);
-      const ranges = (await Promise.all(state.clips.map((clip, index) => clip.kind === "photo" ? [] : detectClipSilences(media[index].silenceLevels, clip, starts[index], sensitivity, shortest_pause, signal)))).flat();
-      state = studioReducer(state, { type: "remove-silences", ranges: ranges.map((range, index) => ({ ...range, newId: `silence-${index}` })) });
+      const ranges = (await Promise.all(state.clips.map((clip, index) => clip.track !== "v1" || clip.kind === "photo" ? [] : detectClipSilences(mediaById(state.media, clip.mediaId).silenceLevels, clip, starts[index], sensitivity, shortest_pause, signal)))).flat();
+      const next = studioReducer(state, { type: "remove-silences", ranges: ranges.map((range, index) => ({ ...range, newId: `silence-${index}` })) });
+      if (next.message !== null) {
+        if (next.clips === state.clips) throw new ToolError(next.message);
+        warnings.push(next.message);
+      }
+      state = next;
     }
     const longSide = request.input.quality === "720p" ? 1280 : 1920;
     const timeline = { ...studioTimeline(state), ...studioSize(state.aspect, longSide) };
-    if (timelineDuration(timeline.clips) <= 0) throw new Error("Silence removal left no footage");
+    if (timelineDuration(timeline.clips) <= 0) throw new ToolError("Silence removal left no footage");
     const frames = state.overlays.map((overlay, index) => {
       const frame = document.createElement("iframe");
       frame.width = String(timeline.overlays[index].width); frame.height = String(timeline.overlays[index].height);
@@ -90,7 +97,10 @@ window.runStudio = async (request) => {
       for (const byte of bytes.subarray(at, at + 256 * 1024)) binary += String.fromCharCode(byte);
       await window.studioWrite(btoa(binary));
     }
-    return { duration: timelineDuration(timeline.clips), width: timeline.width, height: timeline.height, captions: timeline.captions === undefined ? 0 : timeline.captions.lines.length };
+    return { duration: timelineDuration(timeline.clips), width: timeline.width, height: timeline.height, captions: timeline.captions === undefined ? 0 : timeline.captions.lines.length, warnings };
+  } catch (error) {
+    if (error instanceof ToolError) return { error: error.message, details: error.details };
+    throw error;
   } finally {
     if (worker !== null) worker.dispose();
     for (const item of media) URL.revokeObjectURL(item.source.url);

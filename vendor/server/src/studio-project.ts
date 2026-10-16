@@ -1,4 +1,54 @@
 // generated from the Modisign monorepo, do not edit
+export type VideoTrack = "v1" | "v2";
+export type TrackPlacement = { track: "v1" } | { track: "v2"; start: number };
+export type ClipTransition = { type: "crossfade" | "dip"; duration: number };
+export const STUDIO_TIME_TOLERANCE = 1e-6;
+export const TIMELINE_BOUNDARY_TOLERANCE = 1e-6 / 30;
+export type SequenceClip = { duration: number; transition?: ClipTransition };
+export type ScheduledClip = SequenceClip & TrackPlacement;
+
+export function clampTransition(transition: ClipTransition, outgoing: number, incoming: number): ClipTransition | undefined {
+  const limit = (transition.type === "crossfade" ? 0.45 : 2) * Math.min(outgoing, incoming);
+  const duration = Math.min(transition.duration, 1, limit);
+  return duration < 0.2 - STUDIO_TIME_TOLERANCE ? undefined : { type: transition.type, duration };
+}
+export function sequenceStarts(clips: readonly SequenceClip[]) {
+  let at = 0;
+  return clips.map((clip, index) => {
+    const start = at;
+    const next = clips[index + 1];
+    const transition = next === undefined || clip.transition === undefined ? undefined : clampTransition(clip.transition, clip.duration, next.duration);
+    at += clip.duration - (transition !== undefined && transition.type === "crossfade" ? transition.duration : 0);
+    return start;
+  });
+}
+export function sequenceDuration(clips: readonly SequenceClip[]) {
+  return clips.length === 0 ? 0 : sequenceStarts(clips)[clips.length - 1] + clips[clips.length - 1].duration;
+}
+export function clipSchedule(clips: readonly ScheduledClip[]) {
+  const starts = sequenceStarts(clips.filter((clip) => clip.track === "v1"));
+  let index = 0;
+  return clips.map((clip) => clip.track === "v1" ? starts[index++] : clip.start);
+}
+export function scheduleDuration(clips: readonly ScheduledClip[]) {
+  const starts = clipSchedule(clips);
+  return clips.reduce((end, clip, index) => Math.max(end, starts[index] + clip.duration), 0);
+}
+export function validTrackSchedule(clips: readonly ScheduledClip[]) {
+  let end = 0;
+  let v2 = false;
+  for (const clip of clips) {
+    if (clip.track === "v1") {
+      if (v2 || Object.hasOwn(clip, "start")) return false;
+    } else {
+      v2 = true;
+      if (clip.transition !== undefined || !Number.isFinite(clip.start) || clip.start < 0 || clip.start < end - TIMELINE_BOUNDARY_TOLERANCE) return false;
+      end = clip.start + clip.duration;
+    }
+  }
+  return true;
+}
+
 const TEMPLATE_HREF = /^\/overlays\/[a-z0-9]+(?:-[a-z0-9]+)*\?(?:[A-Za-z0-9!$&'()*+,./:;=?@_~-]|%[0-9a-fA-F]{2})+$/;
 
 export function isTemplateHref(value: unknown): value is string {
@@ -8,10 +58,10 @@ export function isTemplateHref(value: unknown): value is string {
 export const STUDIO_ASPECTS = ["9x16", "4x5", "1x1", "16x9"] as const;
 export const MAX_STUDIO_DURATION = 180;
 export const MAX_STUDIO_CLIPS = 300;
+export const MAX_STUDIO_PROJECT_BYTES = 64 * 1024;
 export const MIN_CLIP_DURATION = 0.2;
 export const MIN_PHOTO_DURATION = 0.5;
 export const MAX_PHOTO_DURATION = 30;
-export const STUDIO_TIME_TOLERANCE = 1e-6;
 export const CAPTION_STYLE_IDS = ["clean", "boxed", "minimal", "karaoke", "bold-keyword", "word-pop", "highlight-box", "neon", "pop-up", "typewriter", "outline", "editorial", "gradient"] as const;
 export type CaptionStyleId = typeof CAPTION_STYLE_IDS[number];
 export type CaptionPlacement = { position: "upper" | "center" | "lower"; size: "s" | "m" | "l" };
@@ -29,21 +79,49 @@ export const DEFAULT_CLIP_SETTINGS: Readonly<ClipSettings> = {
 export type PhotoSettings = Pick<ClipSettings, "frameMode" | "centerX" | "centerY" | "zoom"> & { slowZoom: boolean };
 export type PunchIn = { start: number; length: number; zoom: 1.1 | 1.25 | 1.4 };
 export const MAX_PUNCH_INS = 50;
-export type ProjectClip =
+export type Crop = { top: number; right: number; bottom: number; left: number };
+export const PLACE_MODES = ["full", "top", "bottom", "left", "right", "pip-top-left", "pip-top-right", "pip-bottom-left", "pip-bottom-right"] as const;
+export type Place = { mode: typeof PLACE_MODES[number] } | { mode: "custom"; x: number; y: number; width: number; height: number };
+export type ClipSpatial = { crop: Crop; place: Place };
+export function defaultSpatial(): ClipSpatial {
+  return { crop: { top: 0, right: 0, bottom: 0, left: 0 }, place: { mode: "full" } };
+}
+export function isCrop(value: unknown): value is Crop {
+  return record(value, ["top", "right", "bottom", "left"])
+    && range(value.top, 0, 95) && range(value.right, 0, 95) && range(value.bottom, 0, 95) && range(value.left, 0, 95)
+    && value.left + value.right <= 95 && value.top + value.bottom <= 95;
+}
+export function isPlace(value: unknown): value is Place {
+  if (typeof value !== "object" || value === null || !("mode" in value)) return false;
+  if (value.mode !== "custom") return record(value, ["mode"]) && PLACE_MODES.some((mode) => mode === value.mode);
+  if (!record(value, ["mode", "x", "y", "width", "height"])) return false;
+  return range(value.x, 0, 1) && range(value.y, 0, 1) && range(value.width, 0.05, 1) && range(value.height, 0.05, 1)
+    && value.x + value.width <= 1 + STUDIO_TIME_TOLERANCE && value.y + value.height <= 1 + STUDIO_TIME_TOLERANCE;
+}
+export type ProjectClip = (
   | { label: string; kind: "video"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; punchIns?: PunchIn[] }
-  | { label: string; kind: "photo"; duration: number; settings: PhotoSettings; sourceStart?: number; punchIns?: PunchIn[] };
+  | { label: string; kind: "photo"; duration: number; settings: PhotoSettings; sourceStart?: number; punchIns?: PunchIn[] }
+) & { crop?: Crop; place?: Place } & ({ track?: never; start?: never } | { track: "v2"; start: number });
 export function projectClipDuration(clip: ProjectClip) {
   return clip.kind === "photo" ? clip.duration : clip.outPoint - clip.inPoint;
 }
-export type ClipTransition = { type: "crossfade" | "dip"; duration: number };
-export function clampTransition(transition: ClipTransition, outgoing: number, incoming: number): ClipTransition | undefined {
-  const limit = (transition.type === "crossfade" ? 0.45 : 2) * Math.min(outgoing, incoming);
-  const duration = Math.min(transition.duration, 1, limit);
-  return duration < 0.2 - STUDIO_TIME_TOLERANCE ? undefined : { type: transition.type, duration };
+export function projectTrack(clip: ProjectClip): TrackPlacement {
+  return clip.track === undefined ? { track: "v1" } : { track: "v2", start: clip.start };
+}
+export function projectSpatial(clip: ProjectClip): ClipSpatial {
+  const defaults = defaultSpatial();
+  return { crop: clip.crop === undefined ? defaults.crop : clip.crop, place: clip.place === undefined ? defaults.place : clip.place };
+}
+export function projectSchedule(project: Pick<StudioProject, "clips" | "transitions">) {
+  let cut = 0;
+  return project.clips.map((clip) => {
+    const transition = clip.track === "v2" || project.transitions === undefined ? undefined : project.transitions.find((transition) => transition.cut === cut);
+    if (clip.track === undefined) cut++;
+    return { ...projectTrack(clip), duration: projectClipDuration(clip), transition };
+  });
 }
 export function projectDuration(project: Pick<StudioProject, "clips" | "transitions">) {
-  const total = project.clips.reduce((sum, clip) => sum + projectClipDuration(clip), 0);
-  return project.transitions === undefined ? total : total - project.transitions.reduce((sum, transition) => sum + (transition.type === "crossfade" ? transition.duration : 0), 0);
+  return scheduleDuration(projectSchedule(project));
 }
 export type StudioProject = {
   name: string;
@@ -63,7 +141,7 @@ export type StudioProjectSummary = {
   updated_at: string;
 };
 
-function record(value: unknown, keys: string[]): value is Record<string, unknown> {
+function record<K extends string>(value: unknown, keys: K[]): value is Record<K, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
@@ -127,27 +205,32 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     || !Array.isArray(value.clips) || value.clips.length > MAX_STUDIO_CLIPS
     || !Array.isArray(value.overlays) || value.overlays.length > 100) return false;
   if (Object.hasOwn(value, "captions") && !isCaptionSettings(value.captions)) return false;
-  let total = 0;
+  const v1: ProjectClip[] = [];
   for (const clip of value.clips) {
     if (typeof clip !== "object" || clip === null || !text(clip.label, 255)) return false;
+    const spatialKeys: string[] = [];
+    if (Object.hasOwn(clip, "crop")) { if (!isCrop(clip.crop)) return false; spatialKeys.push("crop"); }
+    if (Object.hasOwn(clip, "place")) { if (!isPlace(clip.place)) return false; spatialKeys.push("place"); }
+    if (Object.hasOwn(clip, "track")) {
+      if (clip.track !== "v2" || !number(clip.start)) return false;
+      spatialKeys.push("track", "start");
+    } else { if (Object.hasOwn(clip, "start")) return false; v1.push(clip); }
     if (clip.kind === "photo") {
       if (Object.hasOwn(clip, "punchIns") && !isPunchIns(clip.punchIns)) return false;
-      const keys = ["label", "kind", "duration", "settings"];
+      const keys = ["label", "kind", "duration", "settings", ...spatialKeys];
       if (Object.hasOwn(clip, "punchIns")) keys.push("punchIns");
       if (Object.hasOwn(clip, "sourceStart")) {
         if (!range(clip.sourceStart, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)) return false;
         keys.push("sourceStart");
       }
       if (!record(clip, keys) || !isPhotoDuration(clip.duration) || !isPhotoSettings(clip.settings)) return false;
-      total += clip.duration;
     } else {
-      const keys = ["label", "kind", "duration", "inPoint", "outPoint", "settings"];
+      const keys = ["label", "kind", "duration", "inPoint", "outPoint", "settings", ...spatialKeys];
       if (clip.kind !== "video" || !isClipSettings(clip.settings)) return false;
       if (Object.hasOwn(clip, "punchIns")) keys.push("punchIns");
       if (!record(clip, keys) || !number(clip.duration) || clip.duration < MIN_CLIP_DURATION
         || !number(clip.inPoint) || !number(clip.outPoint) || !isValidTrim(clip.duration, clip.inPoint, clip.outPoint)) return false;
       if (Object.hasOwn(clip, "punchIns") && !isPunchIns(clip.punchIns, 0, MAX_STUDIO_DURATION)) return false;
-      total += clip.outPoint - clip.inPoint;
     }
   }
   if (Object.hasOwn(value, "transitions")) {
@@ -155,15 +238,17 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     const cuts = new Set<number>();
     for (const transition of value.transitions) {
       if (!record(transition, ["cut", "type", "duration"]) || typeof transition.cut !== "number"
-        || !Number.isInteger(transition.cut) || transition.cut < 0 || transition.cut >= value.clips.length - 1
+        || !Number.isInteger(transition.cut) || transition.cut < 0 || transition.cut >= v1.length - 1
         || cuts.has(transition.cut) || (transition.type !== "crossfade" && transition.type !== "dip")
         || !range(transition.duration, 0.2 - STUDIO_TIME_TOLERANCE, 1)) return false;
-      const valid = clampTransition({ type: transition.type, duration: transition.duration }, projectClipDuration(value.clips[transition.cut]), projectClipDuration(value.clips[transition.cut + 1]));
+      const valid = clampTransition({ type: transition.type, duration: transition.duration }, projectClipDuration(v1[transition.cut]), projectClipDuration(v1[transition.cut + 1]));
       if (valid === undefined || valid.duration < transition.duration - STUDIO_TIME_TOLERANCE) return false;
       cuts.add(transition.cut);
-      if (transition.type === "crossfade") total -= transition.duration;
     }
   }
+  const project = value as StudioProject;
+  if (!validTrackSchedule(projectSchedule(project))) return false;
+  const total = projectDuration(project);
   if (total > MAX_STUDIO_DURATION + STUDIO_TIME_TOLERANCE) return false;
   for (const overlay of value.overlays) {
     if (!record(overlay, ["family", "preset", "start", "configuration"])
@@ -173,6 +258,6 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     if (!isTemplateHref(overlay.configuration)
       || !overlay.configuration.startsWith(`/overlays/${overlay.family}?`)) return false;
   }
-  return new TextEncoder().encode(JSON.stringify(value)).length <= 65536;
+  return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_STUDIO_PROJECT_BYTES;
 }
 

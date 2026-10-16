@@ -79,11 +79,16 @@ async function runStudioPage(edit: EditInput, media: Awaited<ReturnType<typeof l
       if (output === undefined) throw new Error("Transcript has no output file");
       await appendFile(output, Buffer.from(base64, "base64"));
     });
-    return await browser.page.evaluate((request) => window.runStudio(request), { input: edit, media: sources, overlays, transcriptOnly });
+    const result = await browser.page.evaluate((request) => window.runStudio(request), { input: edit, media: sources, overlays, transcriptOnly });
+    if (typeof result === "object" && result !== null && "error" in result) {
+      const failure = result as { error: string; details: Record<string, unknown> };
+      throw new ToolError(failure.error, failure.details);
+    }
+    return result;
   } catch (error) {
     signal.throwIfAborted();
     if (error instanceof ToolError) throw error;
-    throw new ToolError(error instanceof Error ? `Studio export failed: ${error.message}` : "Studio export failed.");
+    throw new ToolError(transcriptOnly ? "Transcription failed." : "Studio export failed.");
   } finally { await browser.close(); }
 }
 export async function renderStudio(input: StudioInput, signal: AbortSignal, update: Update): Promise<{ artifact: Artifact; warnings: string[] }> {
@@ -97,16 +102,16 @@ export async function renderStudio(input: StudioInput, signal: AbortSignal, upda
     const output = join(work, "studio.mp4");
     await writeFile(output, "", { mode: 0o600 });
     update("rendering", 0.01);
-    const result = await runStudioPage(editInput(validated.input), validated.media, false, signal, update, output) as { duration: number };
+    const result = await runStudioPage(editInput(validated.input), validated.media, false, signal, update, output) as { duration: number; warnings: string[] };
     signal.throwIfAborted();
     const path = await publishFile(output, desired);
     await track("mcp_render", { free, kind: "studio", outcome: "success" });
-    return { artifact: { path, mime_type: "video/mp4", bytes: (await stat(path)).size, duration_seconds: result.duration }, warnings: [] };
+    return { artifact: { path, mime_type: "video/mp4", bytes: (await stat(path)).size, duration_seconds: result.duration }, warnings: result.warnings };
   } catch (error) { await track("mcp_render", { free, kind: "studio", outcome: "failure" }); throw error; }
   finally { if (work !== undefined) await rm(work, { recursive: true, force: true }); }
 }
 export async function getTranscript(input: { path: string; in?: number; out?: number }, signal: AbortSignal) {
-  const edit: EditInput = { clips: [{ path: input.path, ...(input.in === undefined ? {} : { in: input.in }), ...(input.out === undefined ? {} : { out: input.out }) }], aspect: "9x16" };
+  const edit: EditInput = { clips: [{ path: input.path, track: "v1", ...(input.in === undefined ? {} : { in: input.in }), ...(input.out === undefined ? {} : { out: input.out }) }], aspect: "9x16" };
   const media = await localMedia(edit, signal);
   if (media[0].info.kind !== "video") throw new ToolError("get_transcript requires a video with English speech.");
   mapClips(edit, media.map((item) => item.info));

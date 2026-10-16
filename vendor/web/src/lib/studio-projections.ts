@@ -23,11 +23,13 @@ export function clipTime(time: number) {
 }
 
 export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "overlays" | "aspect" | "transcripts" | "captions">): VideoPreviewTimeline {
-  return { clips: state.clips.map((clip) => {
+  const starts = clipStarts(state.clips);
+  return { clips: state.clips.map((clip, index) => {
     if (clip.mediaId === null) throw new Error("Relink every missing clip before rendering");
     const media = mediaById(state.media, clip.mediaId);
-    return media.kind === "photo" ? { ...media.source, kind: "photo", duration: clip.outPoint - clip.inPoint, sourceStart: clip.sourceStart, punchIns: clip.punchIns, settings: clip.settings, transition: clip.transition }
-      : { ...media.source, transition: clip.transition, inPoint: clip.inPoint, outPoint: clip.outPoint, punchIns: clip.punchIns, settings: clip.settings };
+    const schedule = { id: clip.id, track: clip.track, startsAt: starts[index], crop: clip.crop, place: clip.place };
+    return media.kind === "photo" ? { ...media.source, ...schedule, kind: "photo", duration: clip.outPoint - clip.inPoint, sourceStart: clip.sourceStart, punchIns: clip.punchIns, settings: clip.settings, transition: clip.transition }
+      : { ...media.source, ...schedule, kind: "video", transition: clip.transition, inPoint: clip.inPoint, outPoint: clip.outPoint, punchIns: clip.punchIns, settings: clip.settings };
   }),
     ...studioSize(state.aspect), frameRate: 30,
     captions: state.captions === null ? undefined : { ...state.captions, lines: captionLines(timelineWords(state.clips, state.transcripts), state.captions.style) },

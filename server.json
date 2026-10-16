@@ -3,14 +3,14 @@
   "name": "io.github.slvDev/modisign",
   "title": "Modisign",
   "description": "Make animated overlays and edit short videos with Modisign. Everything renders on your computer.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "websiteUrl": "https://modisign.app/mcp",
   "repository": { "url": "https://github.com/slvDev/modisign-mcp", "source": "github" },
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@modisign/mcp",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "transport": { "type": "stdio" }
     }
   ]

@@ -9,8 +9,26 @@ Make animated overlays and edit short videos from Claude, ChatGPT, Cursor or any
 - “Make a red subscribe button for 9:16 and save it as a green-screen MP4.”
 - “Put a lower third with my name on ~/Movies/intro.mp4 at 0:03.”
 - “Cut these three clips into one Reel, remove the pauses and add captions.”
+- “Put reference.mp4 on top, muted, me.mp4 on the bottom, crop 5% off the sides, start them together, Clean captions from my voice.”
 - “Show me hook title overlays for a cooking channel.”
 - “Render the countdown overlay with a transparent background.”
+
+## Split-screen example
+
+Pass this to `edit_video`, using your absolute local paths:
+
+```json
+{
+  "clips": [
+    {"path":"/absolute/me.mp4","track":"v1","in":0,"out":6,"place":{"mode":"bottom"},"crop":{"top":0,"right":5,"bottom":0,"left":5}},
+    {"path":"/absolute/reference.mp4","track":"v2","start":0,"in":0,"out":6,"place":{"mode":"top"},"crop":{"top":0,"right":5,"bottom":0,"left":5},"mute":true}
+  ],
+  "aspect": "9x16",
+  "captions": {"style":"clean","position":"lower","size":"m"}
+}
+```
+
+Every clip needs `track`. V1 plays in list order; V2 needs `start` in timeline seconds and cannot overlap another V2 clip. Crop removes source-edge percentages; omitted crop/place means zero crop/full picture. Captions and pause detection use V1 only. Pause removal cuts both tracks together; remove any named conflicting V1 transition before retrying. Align starts manually; this does not correct recording drift. Both 1080p and 720p are free under the overlay/caption rules below, up to 180 seconds across both tracks.
 
 ## Install
 
@@ -84,7 +102,7 @@ Pro is $9/month: [Pricing](https://modisign.app/pricing). Sign in with `npx -y @
 - Captions are made on your computer with an English speech model downloaded once from Hugging Face (about 43 MB).
 - Anonymous usage counts have no account link; turn them off with `MODISIGN_NO_TELEMETRY=1`.
 
-Full details: https://modisign.app/privacy and [TECHNICAL.md](TECHNICAL.md).
+Full details: https://modisign.app/privacy and [TECHNICAL.md](https://github.com/slvDev/modisign-mcp/blob/main/TECHNICAL.md).
 
 ## Commands
 

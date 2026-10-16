@@ -1,5 +1,6 @@
 // generated from the Modisign monorepo, do not edit
-import { clipStarts, clipDuration, timelineDuration, visibleClips, type VideoTimeline } from "@/lib/video-timeline";
+import { aacPriming, STUDIO_AAC_CONFIG } from "@/lib/aac-timing";
+import { clipStarts, clipDuration, timelineDuration, timelineSampler, type VideoTimeline } from "@/lib/video-timeline";
 import type { TimelineSources } from "@/lib/timeline-sequence";
 import { AudioBufferSink, AudioSample, AudioSampleSink, AudioSampleSource, EncodedAudioPacketSource,
   EncodedPacket, EncodedPacketSink, Quality, canEncodeAudio, type Input } from "mediabunny";
@@ -72,6 +73,7 @@ function audioValue(buffer: AudioBuffer, first: number, second: number, fraction
 
 export async function mixTimelineAudio(timeline: VideoTimeline, sources: TimelineSources, source: AudioWriter, signal: AbortSignal) {
   const starts = clipStarts(timeline.clips);
+  const sampleAt = timelineSampler(timeline.clips, starts);
   const end = Math.round(timelineDuration(timeline.clips) * AUDIO_RATE);
   type Cursor = { origin: number; buffers: ReturnType<AudioBufferSink["buffers"]>; decoded: IteratorResult<{ buffer: AudioBuffer; timestamp: number }> };
   const cursors = new Map<number, Cursor | null>();
@@ -82,7 +84,8 @@ export async function mixTimelineAudio(timeline: VideoTimeline, sources: Timelin
       const data = new Float32Array(length * 2);
       for (let index = 0; index < length; index++) {
         const time = (at + index) / AUDIO_RATE;
-        for (const item of visibleClips(timeline.clips, time, starts)) {
+        for (const item of sampleAt(time)) {
+          if (item.gain === 0) continue;
           let cursor = cursors.get(item.index);
           if (cursor === undefined) {
             const media = await sources.sources[item.index];
@@ -111,6 +114,7 @@ export async function mixTimelineAudio(timeline: VideoTimeline, sources: Timelin
       for (const [index, cursor] of cursors) if (cursor !== null && starts[index] + clipDuration(timeline.clips[index]) <= (at + length) / AUDIO_RATE) {
         await cursor.buffers.return(); cursors.set(index, null);
       }
+      for (let index = 0; index < data.length; index++) data[index] = Math.max(-1, Math.min(1, data[index]));
       const sample = new AudioSample({ data, format: "f32-planar", numberOfChannels: 2, sampleRate: AUDIO_RATE, timestamp: at / AUDIO_RATE });
       try { await source.add(sample); } finally { sample.close(); }
     }
@@ -120,7 +124,8 @@ export async function mixTimelineAudio(timeline: VideoTimeline, sources: Timelin
 }
 
 type AudioWriter = { add: (sample: AudioSample) => Promise<void> };
-function normalizedAudio(duration: number) {
+async function normalizedAudio(duration: number) {
+  const priming = await aacPriming();
   const source = new EncodedAudioPacketSource("aac");
   let failure: unknown;
   let decoderConfig: AudioDecoderConfig | undefined;
@@ -131,15 +136,15 @@ function normalizedAudio(duration: number) {
       if (metadata !== undefined && metadata.decoderConfig !== undefined) decoderConfig = metadata.decoderConfig;
       const packet = EncodedPacket.fromEncodedChunk(chunk);
       // Browser AAC encoders emit priming and padding outside the requested timeline.
-      const start = Math.round(packet.timestamp * AUDIO_RATE) / AUDIO_RATE;
+      const start = Math.round((packet.timestamp - priming) * AUDIO_RATE) / AUDIO_RATE;
       const packetDuration = chunk.duration === null ? 1024 / AUDIO_RATE : packet.duration;
       const end = Math.min(duration, start + packetDuration);
-      if (start < 0 || start >= end) return;
+      if (end <= 0 || start >= end) return;
       writing = writing.then(() => source.add(packet.clone({ timestamp: start, duration: end - start }), decoderConfig === undefined ? metadata : { decoderConfig })).catch((error: unknown) => { failure = error; });
     },
     error: (error) => { failure = error; if (queued !== null) queued(); },
   });
-  encoder.configure({ codec: "mp4a.40.2", sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 });
+  encoder.configure(STUDIO_AAC_CONFIG);
   const samples: AudioWriter = { add: async (sample) => {
     if (failure !== undefined) throw failure;
     const data = sample.toAudioData();

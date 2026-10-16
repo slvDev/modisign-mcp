@@ -1,4 +1,5 @@
 // generated from the Modisign monorepo, do not edit
+import { sourceOrigin } from "@/lib/video-timeline";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import { SPEECH_FILES, SPEECH_MODEL, SPEECH_REVISION, type CaptionWord } from "./captions";
 
@@ -64,7 +65,7 @@ export async function speechPcm(file: File, duration: number, signal: AbortSigna
     if (!(await audio.canDecode())) throw new Error("This browser cannot decode the video's audio.");
     const video = await input.getPrimaryVideoTrack();
     if (video === null) throw new Error("This video has no picture.");
-    const origin = Math.max(0, Math.min(await audio.getFirstTimestamp(), await video.getFirstTimestamp()));
+    const origin = sourceOrigin(await video.getFirstTimestamp(), await audio.getFirstTimestamp());
     for await (const { buffer, timestamp } of new AudioBufferSink(audio).buffers(origin, origin + duration)) {
       signal.throwIfAborted();
       const start = Math.max(0, Math.ceil((timestamp - origin) * rate));
