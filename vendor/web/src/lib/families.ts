@@ -4,8 +4,8 @@ import { extname, join } from "node:path";
 import { cache } from "react";
 import { ASPECTS, type Aspect, isAspect } from "@/lib/aspects";
 import { FAMILY_IDS, type FamilyId } from "@/lib/family-ids";
-import { isValidValue, ROLES, type Variable, type Look, type Values } from "@/lib/values";
-import { validateTemplatePalettes } from "../../../server/src/template-values";
+import { isPositive, type Variable, type Look, type Values } from "@/lib/values";
+import { validateTemplatePalettes, validateVariables } from "../../../server/src/template-values";
 
 // Families live outside the Next app so the renderer and the site share one source.
 export const TEMPLATES_DIR = join(process.cwd(), "..", "templates");
@@ -23,7 +23,6 @@ export type Family = {
   variables: Variable[];
 };
 
-const SUPPORTED_TYPES = new Set(["string", "color", "boolean", "enum", "number"]);
 export const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function assertKeys(where: string, row: Record<string, unknown>, keys: string[]) {
@@ -36,8 +35,6 @@ export async function readJson(path: string): Promise<Record<string, unknown>> {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`${path}: not an object`);
   return parsed as Record<string, unknown>;
 }
-
-export const isPositive = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
 
 // Replaces the single static attribute the renderer reads at compile time; zero or several matches mean a broken family.
 function replaceOnce(html: string, pattern: RegExp, replacement: string) {
@@ -82,25 +79,7 @@ export const loadFamily = cache(async (id: FamilyId): Promise<Family> => {
   const declared = /data-composition-variables='([^']*)'/.exec(html);
   if (!declared) throw new Error(`${id} declares no variables`);
   const variables: Variable[] = JSON.parse(declared[1]);
-  const customEnums = new Set<string>();
-  for (const variable of variables) {
-    if (!SUPPORTED_TYPES.has(variable.type)) throw new Error(`${id}: unsupported variable type ${variable.type}`);
-    if (!ROLES.includes(variable.role)) throw new Error(`${id}: bad role for ${variable.id}`);
-    if ("custom" in variable && variable.type !== "number") throw new Error(`${id}: custom must belong to a number`);
-    if (variable.type === "number") {
-      if (!Number.isFinite(variable.min) || !Number.isFinite(variable.max) || variable.min > variable.max || !isPositive(variable.step) || typeof variable.unit !== "string") {
-        throw new Error(`${id}: bad number bounds, step or unit for ${variable.id}`);
-      }
-      if (variable.custom !== undefined) {
-        const owner = variables.find((v) => v.id === variable.custom);
-        if (owner === undefined || owner.type !== "enum" || !owner.options.some((option) => option.value === "custom") || customEnums.has(owner.id)) {
-          throw new Error(`${id}: ${variable.id} must name an enum with a custom option and no other custom number`);
-        }
-        customEnums.add(owner.id);
-      }
-    }
-    if (!isValidValue(variable, variable.default)) throw new Error(`${id}: bad default for ${variable.id}`);
-  }
+  validateVariables(id, variables);
   if (Number(ROOT_DURATION.exec(html)?.[2]) !== default_duration) {
     throw new Error(`${id}: root data-duration must equal default_duration`);
   }

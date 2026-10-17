@@ -2,14 +2,14 @@
 import { type Aspect, isAspect } from "./aspects.ts";
 import type { Family } from "@/lib/families";
 import type { TemplateOptions } from "@/lib/hrefs";
-import { changedValues, findLook, type Look, mergeValues, parseValues, type Values, type Variable } from "./values.ts";
+import { changedValues, findLook, isRelevant, type Look, mergeValues, parseValues, type Values, type Variable } from "./values.ts";
 
 export type ConfigFamily = Pick<Family, "variables" | "supported_aspects" | "default_duration">;
 export type TemplateConfig = { aspect: Aspect; look: string; duration: number; values: Values };
 
 export function templateTitle(family: Pick<Family, "name" | "variables">, values: Values): string {
   const texts = family.variables
-    .filter((variable) => variable.role === "content" && variable.type === "string")
+    .filter((variable) => variable.role === "content" && variable.type === "string" && isRelevant(family.variables, values, variable))
     .map((variable) => values[variable.id])
     .filter((text) => text !== "");
   return texts.length === 0 ? family.name : texts.join(" · ");
@@ -50,11 +50,11 @@ export function parseTemplateConfig(family: ConfigFamily, looks: Look[], entries
   return { aspect, look: look.id, duration, values: mergeValues(family.variables, look.values, values) };
 }
 
-// The same clip apart from what a free template leaves open: the format and the output variables.
+// The same clip apart from what a free template leaves open: the format, the output variables and every value neither configuration uses.
 export const sameTemplate = (variables: Variable[], a: TemplateConfig, b: TemplateConfig) =>
   a.look === b.look &&
   a.duration === b.duration &&
-  changedValues(variables.filter((variable) => variable.role !== "output"), a.values, b.values).length === 0;
+  changedValues(variables.filter((variable) => variable.role !== "output" && (isRelevant(variables, a.values, variable) || isRelevant(variables, b.values, variable))), a.values, b.values).length === 0;
 
 export function configOptions(family: ConfigFamily, looks: Look[], config: TemplateConfig): TemplateOptions {
   const base = mergeValues(family.variables, findLook(looks, config.look).values);

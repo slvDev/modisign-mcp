@@ -19,6 +19,9 @@ export const isNiche = (id: string): id is Niche => Object.hasOwn(NICHES, id);
 
 export const MAX_QUERY_LENGTH = 60;
 
+// The `<family>/<preset>` identity shared by likes, bookmarks and the server.
+export const presetKey = (family: string, preset: string) => `${family}/${preset}`;
+
 // Only "likes" needs the API for counts.
 export const SORTS = { new: "Newest", likes: "Most liked" } as const;
 export type Sort = keyof typeof SORTS;

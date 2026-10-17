@@ -1,7 +1,7 @@
 import { homedir, platform } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 export const RENDERER_VERSION = "0.8.80";
 export const baseUrl = new URL(process.env.MODISIGN_URL ?? "https://modisign.app").origin;
 const origin = new URL(baseUrl);
@@ -17,6 +17,6 @@ export function configDirectory(os = platform(), home = homedir(), appdata = pro
 }
 export const configDir = process.env.MODISIGN_CONFIG_DIR === undefined ? configDirectory() : process.env.MODISIGN_CONFIG_DIR;
 if (!isAbsolute(configDir)) throw new Error("MODISIGN_CONFIG_DIR must be an absolute local path.");
-export const cacheDir = join(configDir, "cache", `v3-hf-${RENDERER_VERSION}`);
+export const cacheDir = join(configDir, "cache", `v4-hf-${RENDERER_VERSION}`);
 export const outputDir = join(homedir(), platform() === "darwin" ? "Movies" : "Videos", "Modisign");
 export const osLabel = platform() === "darwin" ? "macOS" : platform() === "win32" ? "Windows" : "Linux";

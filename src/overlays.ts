@@ -5,12 +5,13 @@ import { isTemplateHref } from "../vendor/web/src/lib/studio-project.js";
 import { ToolError } from "./errors.js";
 import type { StudioOverlay } from "../vendor/web/src/lib/studio-state.js";
 
-export type Configured = { configuration: string; tier: "free" | "pro"; editorUrl: string; studio: Pick<StudioOverlay, "family" | "preset" | "config">; render: {
+export type Relevance = { relevant: string[]; irrelevant: string[] };
+export type Configured = { configuration: string; tier: "free" | "pro"; editorUrl: string; relevance: Relevance; studio: Pick<StudioOverlay, "family" | "preset" | "config">; render: {
   compositionUrl: string; variables: Record<string, string | number | boolean>; duration: number; width: number; height: number; background: string;
 } };
 export type CatalogItem = { family: string; preset: string; name: string; niche: string; free: boolean; poster: string; editorUrl: string };
 type Catalog = { items: CatalogItem[]; nextCursor: string | null };
-export type Field = { id: string; label: string; type: string; value: unknown; [key: string]: unknown };
+export type Field = { id: string; label: string; type: string; value: unknown; relevant: boolean; [key: string]: unknown };
 export type Preset = { properties: Record<string, Field[]>; looks: { id: string; name: string }[]; aspects: string[]; look: string; duration: number; free: boolean };
 export async function catalog(filters: Record<string, unknown>, signal?: AbortSignal): Promise<Catalog> {
   const params = new URLSearchParams();
@@ -19,10 +20,11 @@ export async function catalog(filters: Record<string, unknown>, signal?: AbortSi
   return { items: result.items.map(({ family, preset, name, niche, free, poster, editorUrl }) => ({ family, preset, name, niche, free, poster, editorUrl })), nextCursor: result.nextCursor };
 }
 export const preset = (family: string, id: string, signal?: AbortSignal) => api<Preset>(`/api/mcp/preset?${new URLSearchParams({ family, preset: id })}`, undefined, undefined, signal);
+// inactiveEdits belongs to this request, not to the cached configuration.
 export async function configure(input: Record<string, unknown>, signal?: AbortSignal) {
-  const result = await api<Configured>("/api/mcp/configure", input, undefined, signal);
-  await writeCache(`configuration:${result.configuration}`, result);
-  return result;
+  const { inactiveEdits, ...configured } = await api<Configured & { inactiveEdits: string[] }>("/api/mcp/configure", input, undefined, signal);
+  await writeCache(`configuration:${configured.configuration}`, configured);
+  return { configured, inactiveEdits };
 }
 export function configurationUrl(configuration: string) {
   if (!isTemplateHref(configuration)) throw new ToolError("Use the configuration URL returned by configure_overlay.", { field: "configuration" });
@@ -41,7 +43,7 @@ export async function authorize(configuration: string, signal?: AbortSignal) {
 function validConfigured(value: unknown): value is Configured {
   const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
   if (!record(value) || !isTemplateHref(value.configuration) || (value.tier !== "free" && value.tier !== "pro") || typeof value.editorUrl !== "string"
-    || !record(value.render) || !record(value.studio)) return false;
+    || !record(value.relevance) || !Array.isArray(value.relevance.relevant) || !Array.isArray(value.relevance.irrelevant) || !record(value.render) || !record(value.studio)) return false;
   const { render, studio } = value;
   if (typeof render.compositionUrl !== "string" || !record(render.variables) || typeof render.background !== "string"
     || ![render.duration, render.width, render.height].every((number) => typeof number === "number" && Number.isFinite(number) && number > 0)) return false;
@@ -67,7 +69,7 @@ export async function resolveConfiguration(configuration: string, signal: AbortS
   const variables = JSON.parse(variablesMatch[1]) as Record<string, unknown>;
   const values = Object.fromEntries(Object.values(schema.properties).flat().map(({ id }) => [id, variables[id]]));
   const look = url.searchParams.get("look"), aspect = url.searchParams.get("aspect");
-  const result = await configure({ family, preset: page.items[0].preset, values, ...(look === null ? {} : { look }), ...(aspect === null ? {} : { aspect }), duration: Number(durationMatch[1]), background: variables.background }, signal);
+  const { configured: result } = await configure({ family, preset: page.items[0].preset, values, ...(look === null ? {} : { look }), ...(aspect === null ? {} : { aspect }), duration: Number(durationMatch[1]), background: variables.background }, signal);
   await writeCache(`configuration:${configuration}`, result);
   return result;
 }

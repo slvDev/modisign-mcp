@@ -23,8 +23,8 @@ Ask your assistant: “Find a free career overlay, export it as green-screen MP4
 | Tool | Purpose |
 | --- | --- |
 | `list_overlays` | Search catalog by query, family, niche, free status; paginated |
-| `get_overlay` | Read editable fields, limits, current values, looks and aspects |
-| `configure_overlay` | Apply settings; return configuration URL and free/Pro tier |
+| `get_overlay` | Read editable fields, limits, current values, looks and aspects; each field has `relevant` (used by the preset’s layout now) and `showWhen` (the conditions that use it) |
+| `configure_overlay` | Apply settings; return configuration URL, free/Pro tier, `relevance` and `inactiveEdits` (valid values kept but unused by the final layout, with a `notice`) |
 | `render_overlay` | Start MP4, MOV or WebM export |
 | `add_overlay_to_video` | Composite at a start time onto one local video up to 60 seconds |
 | `edit_video` | Export a Studio sequence with two tracks, crop/place, trims, photos, pauses removed, transitions, overlays and English captions |
@@ -100,7 +100,7 @@ Credentials are stored at `~/.config/modisign/credentials.json` (Windows: `%APPD
 
 On Windows, PowerShell uses the Windows ACL API to create the directory and credential file with a protected DACL granting only the current user Full Control, then verifies it before writing a token and before reading credentials. If protection cannot be established or verified, login and credential use fail with a clear error. Windows argument construction is unit-tested; Windows runtime execution is untested here.
 
-Composition/configuration caches live below the same directory in `cache/v3-hf-0.8.80`; these contain overlay text. Delete the cache directory to clear it. Render scratch files are cleaned after success, failure or cancellation.
+Composition/configuration caches live below the same directory in `cache/v4-hf-0.8.80`; these contain overlay text. Delete the cache directory to clear it. Render scratch files are cleaned after success, failure or cancellation.
 
 ### Telemetry
 
@@ -138,7 +138,7 @@ From the repository root, `mcp/scripts/mirror.sh` generates an isolated source m
 
 The official Registry metadata is [server.json](server.json); `package.json.mcpName` matches `io.github.slvDev/modisign`. The repository owner can verify it with `mcp-publisher login github`; `app.modisign/modisign` instead requires domain proof. Publish npm before registry metadata. [Registry quickstart](https://modelcontextprotocol.io/registry/quickstart).
 
-mcp.so takes a GitHub issue. For Claude directory discovery, a local server and this skill may be submitted in a plugin bundle. [Claude publishing](https://claude.com/docs/directory/publish). No publication is performed by the build.
+For Claude directory discovery, a local server and this skill may be submitted in a plugin bundle. [Claude publishing](https://claude.com/docs/directory/publish). No publication is performed by the build.
 
 ## License
 

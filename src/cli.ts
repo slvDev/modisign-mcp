@@ -42,7 +42,7 @@ async function main() {
     if (positionals.length !== 1 || !/^[a-z0-9-]+\/[a-z0-9-]+$/.test(positionals[0])) throw new Error("Usage: modisign-mcp render <family>/<preset> [--aspect 16x9] [--background green|transparent] [--out file.mp4|file.mov|file.webm]");
     const [family, preset] = positionals[0].split("/");
     if (values.background === "transparent" && values.out?.endsWith(".mp4")) throw new Error("MP4 cannot carry transparency. Choose --out overlay.mov or overlay.webm.");
-    const config = await configure({ family, preset, ...(values.aspect === undefined ? {} : { aspect: values.aspect }), ...(values.background === undefined ? {} : { background: values.background }) });
+    const { configured: config } = await configure({ family, preset, ...(values.aspect === undefined ? {} : { aspect: values.aspect }), ...(values.background === undefined ? {} : { background: values.background }) });
     const format = values.out?.endsWith(".mov") ? "mov" : values.out?.endsWith(".webm") ? "webm" : values.background === "transparent" && values.out === undefined ? "mov" : "mp4";
     const jobs = new Jobs();
     const job = await jobs.start({ configuration: config.configuration, format, output_path: values.out });
