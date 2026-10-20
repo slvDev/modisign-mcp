@@ -34,6 +34,7 @@ export function synchronizedRanges(clips: StudioClip[], ranges: ClipSilence[]) {
   }
   const retained: StudioClip[] = [];
   const expected = new Map<string, number>();
+  const owners = new Map<string, string>();
   const replacements = new Map<string, string>();
   for (const [index, clip] of clips.entries()) {
     const start = starts[index];
@@ -52,6 +53,7 @@ export function synchronizedRanges(clips: StudioClip[], ranges: ClipSilence[]) {
       if (duration < minimum - STUDIO_TIME_TOLERANCE) throw new Error(`Silence removal leaves a ${clip.kind} shorter than ${minimum} seconds.`);
       const sourceStart = clipSourceStart(clip) + range.start - start;
       const id = part === 0 ? clip.id : crypto.randomUUID();
+      owners.set(id, clip.id);
       expected.set(id, warp(range.start));
       const next = fragments[part + 1];
       const nextSource = next === undefined ? Infinity : clipSourceStart(clip) + next.start - start;
@@ -81,5 +83,5 @@ export function synchronizedRanges(clips: StudioClip[], ranges: ClipSilence[]) {
       throw new Error(`Remove the V1 transition after “${affected.label}” before removing these silences.`);
     }
   }
-  return { clips: result, warp };
+  return { clips: result, warp, owners };
 }

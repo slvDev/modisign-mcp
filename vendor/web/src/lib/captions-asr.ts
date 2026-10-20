@@ -1,12 +1,20 @@
 // generated from the Modisign monorepo, do not edit
-import { sourceOrigin } from "@/lib/video-timeline";
-import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import { SPEECH_FILES, SPEECH_MODEL, SPEECH_REVISION, type CaptionWord } from "./captions";
+import { diagnosticsEnabled, mark, phase, registerSnapshot, type MarkDetail } from "./media-diagnostics";
 
 const MODEL_CACHE = "transformers-cache";
-export type AsrBackend = "wasm";
-export type AsrProgress = { phase: "download" | "transcribe"; fraction: number; backend: AsrBackend };
-export type AsrMessage = { type: "progress"; progress: AsrProgress } | { type: "done"; words: CaptionWord[]; backend: AsrBackend } | { type: "error"; message: string; backend: AsrBackend };
+// `fraction` is null until the download reports bytes; audio and transcribe progress is source seconds `seconds` of `total`.
+export type AsrProgress = { phase: "model"; fraction: number | null } | { phase: "audio" | "transcribe"; seconds: number; total: number };
+export type AsrRequest = { type: "transcribe"; id: number; file: File; duration: number; debug: boolean };
+export type AsrMessage =
+  | { type: "progress"; id: number; progress: AsrProgress }
+  | { type: "done"; id: number; words: CaptionWord[]; audio: boolean }
+  | { type: "error"; id: number; message: string }
+  | { type: "mark"; name: string; detail: MarkDetail | null }
+  | { type: "phase"; name: string; state: "start" | "end"; detail: MarkDetail | null }
+  | { type: "inputs"; open: number };
+export type AsrResult = { words: CaptionWord[]; audio: boolean };
+export type CaptionTranscriber = { dispose: () => void; transcribe: (file: File, duration: number) => Promise<AsrResult> };
 export async function modelCacheState() {
   if (!(await caches.has(MODEL_CACHE))) return { complete: false, present: false };
   const keys = await (await caches.open(MODEL_CACHE)).keys();
@@ -16,15 +24,39 @@ export async function modelCacheState() {
 }
 export async function removeModel() { await caches.delete(MODEL_CACHE); }
 
-export function captionTranscriber(signal: AbortSignal, onProgress: (progress: AsrProgress) => void, workerUrl?: URL) {
+// Open Mediabunny inputs live in the worker, which reports them while diagnostics are on.
+const liveWorkers = new Set<{ inputs: number }>();
+let snapshotRegistered = false;
+
+/**
+ * One dedicated worker per job: it decodes the File's audio itself, loads the model once and answers one clip at a time.
+ * `audio` is false for a file without an audio track. Aborting or `dispose` terminates the worker and ignores anything it still sends.
+ */
+export function captionTranscriber(signal: AbortSignal, onProgress: (progress: AsrProgress) => void, workerUrl?: URL): CaptionTranscriber {
   const worker = workerUrl === undefined
     ? new Worker(new URL("./captions-worker.ts", import.meta.url), { type: "module" })
     : new Worker(workerUrl, { type: "module" });
+  const live = { inputs: 0 };
+  const open = new Map<string, (outcome?: MarkDetail | null) => void>();
+  let sequence = 0;
+  let closed = false;
   let failure: Error | null = null;
-  let pending: { resolve: (result: { words: CaptionWord[]; backend: AsrBackend }) => void; reject: (error: Error) => void } | null = null;
+  let pending: { id: number; resolve: (result: AsrResult) => void; reject: (error: Error) => void } | null = null;
+  liveWorkers.add(live);
+  if (!snapshotRegistered && diagnosticsEnabled()) {
+    snapshotRegistered = true;
+    registerSnapshot("asr", () => ({ workers: liveWorkers.size, inputs: [...liveWorkers].reduce((sum, worker) => sum + worker.inputs, 0) }));
+  }
+  mark("asr", "worker:create");
   function dispose() {
+    if (closed) return;
+    closed = true;
     worker.terminate();
     signal.removeEventListener("abort", abort);
+    liveWorkers.delete(live);
+    for (const end of open.values()) end({ outcome: "terminated" });
+    open.clear();
+    mark("asr", "worker:dispose");
   }
   function abort() {
     dispose();
@@ -32,12 +64,21 @@ export function captionTranscriber(signal: AbortSignal, onProgress: (progress: A
   }
   signal.addEventListener("abort", abort, { once: true });
   worker.onmessage = (event: MessageEvent<AsrMessage>) => {
+    if (closed) return;
     const message = event.data;
-    if (message.type === "progress") onProgress(message.progress);
-    else if (pending !== null) {
-      if (message.type === "done") pending.resolve(message);
-      else pending.reject(new Error(message.message));
-      pending = null;
+    if (message.type === "mark") mark("asr", `worker:${message.name}`, message.detail);
+    else if (message.type === "inputs") live.inputs = message.open;
+    else if (message.type === "phase") {
+      if (message.state === "start") open.set(message.name, phase("asr", `worker:${message.name}`, message.detail));
+      else { const end = open.get(message.name); open.delete(message.name); if (end !== undefined) end(message.detail); }
+    } else if (pending !== null && message.id === pending.id) {
+      if (message.type === "progress") onProgress(message.progress);
+      else {
+        const request = pending;
+        pending = null;
+        if (message.type === "done") request.resolve({ words: message.words, audio: message.audio });
+        else request.reject(new Error(message.message));
+      }
     }
   };
   worker.onerror = (event) => {
@@ -45,39 +86,15 @@ export function captionTranscriber(signal: AbortSignal, onProgress: (progress: A
     if (pending !== null) { pending.reject(failure); pending = null; }
     dispose();
   };
-  return { dispose, transcribe: (pcm: Float32Array) => {
+  return { dispose, transcribe: (file: File, duration: number) => {
     signal.throwIfAborted();
     if (failure !== null) throw failure;
+    if (closed) throw new Error("Speech worker is closed");
     if (pending !== null) throw new Error("Speech worker is already transcribing");
-    return new Promise<{ words: CaptionWord[]; backend: AsrBackend }>((resolve, reject) => {
-      pending = { resolve, reject };
-      worker.postMessage({ pcm }, [pcm.buffer]);
+    return new Promise<AsrResult>((resolve, reject) => {
+      const id = ++sequence;
+      pending = { id, resolve, reject };
+      worker.postMessage({ type: "transcribe", id, file, duration, debug: diagnosticsEnabled() } satisfies AsrRequest);
     });
   } };
-}
-export async function speechPcm(file: File, duration: number, signal: AbortSignal) {
-  const rate = 16000;
-  const pcm = new Float32Array(Math.ceil(duration * rate));
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
-  try {
-    const audio = await input.getPrimaryAudioTrack();
-    if (audio === null) return null;
-    if (!(await audio.canDecode())) throw new Error("This browser cannot decode the video's audio.");
-    const video = await input.getPrimaryVideoTrack();
-    if (video === null) throw new Error("This video has no picture.");
-    const origin = sourceOrigin(await video.getFirstTimestamp(), await audio.getFirstTimestamp());
-    for await (const { buffer, timestamp } of new AudioBufferSink(audio).buffers(origin, origin + duration)) {
-      signal.throwIfAborted();
-      const start = Math.max(0, Math.ceil((timestamp - origin) * rate));
-      const end = Math.min(pcm.length, Math.ceil((timestamp - origin + buffer.duration) * rate));
-      const channels = Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel));
-      for (let i = start; i < end; i++) {
-        const position = Math.max(0, (origin + i / rate - timestamp) * buffer.sampleRate);
-        const first = Math.min(buffer.length - 1, Math.floor(position));
-        const second = Math.min(buffer.length - 1, first + 1);
-        for (const data of channels) pcm[i] += (data[first] + (data[second] - data[first]) * (position - first)) / channels.length;
-      }
-    }
-    return pcm;
-  } finally { input.dispose(); }
 }

@@ -7,13 +7,15 @@ import { destination, inputFile, publishFile } from "./files.js";
 import { bundle, configurationUrl, resolveConfiguration } from "./overlays.js";
 import { pictureSize } from "./own-video.js";
 import { probe, type Artifact, type Update } from "./render.js";
-import { validateEdit, mapClips, type EditInput, type MediaInfo } from "./studio-request.js";
+import { validateEdit, mapClips, mapTexts, applyRapidIntro, checkRapidIntroStructure, selectorsCustomized, type EditInput, type MediaInfo } from "./studio-request.js";
 import { assetRoutes, studioBrowser } from "./studio-browser.js";
 import { speechModel } from "./studio-model.js";
 import { timelineDuration } from "../vendor/web/src/lib/video-timeline.js";
+import { initialStudioState } from "../vendor/web/src/lib/studio-state.js";
 
 export type StudioInput = EditInput & { kind: "studio" };
-const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration), captionStyle: input.captions === undefined ? null : input.captions.style });
+const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration), captionStyle: input.captions === undefined ? null : input.captions.style,
+  captionCustomized: input.captions !== undefined && input.captions.word_styles !== undefined && selectorsCustomized(input.captions.word_styles) });
 async function authorizeStudio(input: EditInput, signal?: AbortSignal) {
   const body = authorizationBody(input);
   const key = `free-studio-authorization:${JSON.stringify(body)}`;
@@ -48,6 +50,13 @@ export async function validateStudio(input: StudioInput, signal?: AbortSignal) {
   const media = await localMedia(normalized, signal);
   const clips = mapClips(normalized, media.map((item) => item.info));
   const total = timelineDuration(clips);
+  const texts = mapTexts(normalized, clips);
+  if (normalized.rapid_intro !== undefined) {
+    const { rapid_intro: intro } = normalized;
+    // Silence removal changes every length, so only the browser run on the edited result can judge duration and size.
+    if (normalized.remove_silences === undefined) applyRapidIntro({ ...initialStudioState, aspect: normalized.aspect, clips, texts }, intro);
+    else checkRapidIntroStructure(intro, clips);
+  }
   for (const overlay of overlays) {
     const config = await resolveConfiguration(overlay.configuration, signal === undefined ? new AbortController().signal : signal);
     if (overlay.start > Math.max(0, total - config.render.duration)) throw new ToolError("Overlay start must fit within the sequence.", { field: "overlays.start", allowed: { min: 0, max: Math.max(0, total - config.render.duration) } });

@@ -1,5 +1,8 @@
 // generated from the Modisign monorepo, do not edit
+import type { Input, InputVideoTrack, VideoCodec, VideoSample } from "mediabunny";
 import type { TemplateOptions } from "@/lib/hrefs";
+import { ImportError, NO_REPORT, importStage } from "@/lib/import-progress";
+import { sourceOrigin } from "@/lib/video-timeline";
 
 export type OwnVideo = {
   file: File;
@@ -13,51 +16,71 @@ export function transparentOverlay(options: TemplateOptions): TemplateOptions {
   return { ...options, edits: [...options.edits.filter(([key]) => key !== "background"), ["background", "transparent"]] };
 }
 
-export async function readOwnVideo(file: File, signal: AbortSignal, maxDuration = 60): Promise<OwnVideo> {
-  if (typeof VideoDecoder === "undefined") throw new Error("Your browser cannot decode video for this feature. Use a recent Chrome, Edge or Safari.");
-  const { ALL_FORMATS, BlobSource, Input, VideoSampleSink } = await import("mediabunny");
+const CODEC_NAMES: Partial<Record<VideoCodec, string>> = { avc: "H.264", hevc: "HEVC", vp8: "VP8", vp9: "VP9", av1: "AV1" };
+
+export type OpenedVideo = {
+  video: OwnVideo; input: Input; track: InputVideoTrack;
+  // Smallest primary picture/audio timestamp: source time zero for this clip.
+  origin: number; pictureStart: number;
+  // The decoded first picture; the caller closes it.
+  first: VideoSample;
+  // Stops pending reads and releases the input.
+  dispose: () => void;
+};
+
+// Reads the container's metadata with the demuxer and proves the first picture decodes with the export decoder; the returned blob URL belongs to the caller.
+export async function openOwnVideo(file: File, signal: AbortSignal, maxDuration = 60, report = NO_REPORT): Promise<OpenedVideo> {
+  if (typeof VideoDecoder === "undefined") throw new ImportError("can’t be opened because this browser cannot decode video. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.");
+  report.stage("reading");
+  const { ALL_FORMATS, BlobSource, Input, UnsupportedInputFormatError, VideoSampleSink } = await import("mediabunny");
   signal.throwIfAborted();
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
-  const url = URL.createObjectURL(file);
-  const preview = document.createElement("video");
-  preview.muted = true;
-  preview.preload = "auto";
+  const source = new BlobSource(file);
+  source.on("read", () => report.activity());
+  const input = new Input({ source, formats: ALL_FORMATS });
+  const abort = () => input.dispose();
+  signal.addEventListener("abort", abort, { once: true });
+  const dispose = () => { signal.removeEventListener("abort", abort); input.dispose(); };
+  let first: VideoSample | null = null;
   try {
-    const loaded = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error("This video could not be opened within 15 seconds.")), 15_000);
-      const finish = (error?: Error) => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", aborted);
-        preview.onloadeddata = null;
-        preview.onerror = null;
-        if (error === undefined) resolve();
-        else reject(error);
-      };
-      const aborted = () => finish(new DOMException("Canceled", "AbortError"));
-      signal.addEventListener("abort", aborted, { once: true });
-      preview.onloadeddata = () => finish();
-      preview.onerror = () => finish(new Error("This browser cannot decode this video. Try an H.264 MP4."));
-      preview.src = url;
+    const metadata = await importStage(report, signal, "reading", async () => {
+      try {
+        const track = await input.getPrimaryVideoTrack();
+        if (track === null) throw new ImportError("has no readable video picture. The file may be audio-only or incomplete. Choose another copy.");
+        const audio = await input.getPrimaryAudioTrack();
+        const pictureStart = await track.getFirstTimestamp();
+        const origin = sourceOrigin(pictureStart, audio === null ? null : await audio.getFirstTimestamp());
+        const duration = await input.computeDuration(audio === null ? [track] : [track, audio]) - origin;
+        const width = track.displayWidth;
+        const height = track.displayHeight;
+        if (!Number.isFinite(duration) || duration <= 0 || width <= 0 || height <= 0) throw new ImportError("has no readable duration or picture. Choose another copy.");
+        if (duration > maxDuration) throw new ImportError(`is ${duration.toFixed(1)} seconds. Choose a video up to ${maxDuration} seconds.`);
+        return { track, pictureStart, origin, duration, width, height };
+      } catch (error) {
+        if (error instanceof UnsupportedInputFormatError) throw new ImportError("isn’t a video format this browser can read. Choose an MP4, MOV or WebM video.");
+        throw error;
+      }
     });
-    await loaded;
-    signal.throwIfAborted();
-    const { duration, videoWidth: width, videoHeight: height } = preview;
-    if (!Number.isFinite(duration) || duration <= 0 || width <= 0 || height <= 0) throw new Error("This video has no readable duration or picture.");
-    if (duration > maxDuration) throw new Error(`Choose a video no longer than ${maxDuration} seconds.`);
-    const track = await input.getPrimaryVideoTrack();
-    if (track === null || !(await track.canDecode())) throw new Error("This browser cannot decode this video for export. Try an H.264 MP4.");
-    const sample = await new VideoSampleSink(track).getSample(await track.getFirstTimestamp());
-    if (sample === null) throw new Error("This video has no decodable frames.");
-    sample.close();
-    signal.throwIfAborted();
-    return { file, url, duration, width, height };
+    const { track, pictureStart, origin, duration, width, height } = metadata;
+    first = await importStage(report, signal, "checking", async () => {
+      if (!(await track.canDecode())) {
+        const codec = track.codec === null ? undefined : CODEC_NAMES[track.codec];
+        throw new ImportError(`uses ${codec === undefined ? "video" : `${codec} video`} this browser can’t edit. Update your browser or use an H.264/AAC MP4 copy.`);
+      }
+      const sample = await new VideoSampleSink(track).getSample(pictureStart);
+      if (sample === null) throw new ImportError("has no picture this browser can decode. Try an H.264/AAC MP4 copy.");
+      return sample;
+    });
+    return { video: { file, url: URL.createObjectURL(file), duration, width, height }, input, track, origin, pictureStart, first, dispose };
   } catch (error) {
-    URL.revokeObjectURL(url);
-    if (signal.aborted || error instanceof Error && /^(Choose|This|Your)/.test(error.message)) throw error;
-    throw new Error("This browser cannot read this video. Try an H.264 MP4.");
-  } finally {
-    preview.removeAttribute("src");
-    preview.load();
-    input.dispose();
+    if (first !== null) first.close();
+    dispose();
+    throw error;
   }
+}
+
+export async function readOwnVideo(file: File, signal: AbortSignal, maxDuration = 60, report = NO_REPORT): Promise<OwnVideo> {
+  const opened = await openOwnVideo(file, signal, maxDuration, report);
+  opened.first.close();
+  opened.dispose();
+  return opened.video;
 }

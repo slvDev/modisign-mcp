@@ -102,7 +102,7 @@ test('overlay and Studio authorization use exact free-cache identities and fail 
     if (offline) throw new TypeError('Offline fixture');
     return Response.json(result);
   });
-  for (const body of [{ configuration: '/overlays/hook-title?setup=Overlay' }, { kind: 'studio', configurations: [], captionStyle: 'clean' }]) {
+  for (const body of [{ configuration: '/overlays/hook-title?setup=Overlay' }, { kind: 'studio', configurations: [], captionStyle: 'clean', captionCustomized: false }]) {
     const key = `audit:${JSON.stringify(body)}`;
     assert.equal(await authorizeRequest(body, key), 'free');
     offline = true;

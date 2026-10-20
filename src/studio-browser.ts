@@ -11,7 +11,7 @@ import { isolatedBrowserArguments, renderProxy } from "./render-isolation.js";
 import { ToolError } from "./errors.js";
 
 const studioAssets = fileURLToPath(new URL("./studio/", import.meta.url));
-const types: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".json": "application/json", ".onnx": "application/octet-stream" };
+const types: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".json": "application/json", ".onnx": "application/octet-stream" };
 export async function assetRoutes() {
   const routes = new Map<string, string>();
   for (const name of await readdir(studioAssets)) routes.set(`/${name}`, join(studioAssets, name));

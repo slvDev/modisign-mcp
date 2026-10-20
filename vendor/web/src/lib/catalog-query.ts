@@ -3,7 +3,7 @@ import { isNiche, isSort, MAX_QUERY_LENGTH, type Niche, NICHES, type Sort } from
 import { loadFamilies, SLUG, loadLooks } from "@/lib/families";
 import { type FamilyId, isFamilyId } from "@/lib/family-ids";
 import { editorHref } from "@/lib/hrefs";
-import { loadPresets, presetConfig, type Thumbnail } from "@/lib/presets";
+import { loadPresets, presetConfig, type StudioStill, type Thumbnail } from "@/lib/presets";
 import { serverUrl } from "@/lib/server-url";
 import { configOptions } from "@/lib/template-config";
 import { CONTROL_CHARS } from "@/lib/values";
@@ -98,7 +98,7 @@ export type CatalogItem = {
   added: string;
   options: ReturnType<typeof configOptions>;
   duration: number;
-} & Thumbnail;
+} & Thumbnail & { studioStill: StudioStill };
 
 // Listed presets in compareKeys order; every word of q must appear in the name, niche, family name or text values.
 export async function listPresets({ type, niche, q, sort, cursor, free, paginate = true }: CatalogQuery & { free?: boolean; paginate?: boolean }) {
@@ -138,6 +138,7 @@ export async function listPresets({ type, niche, q, sort, cursor, free, paginate
           free: preset.free,
           added: preset.added,
           ...preset.thumbnail,
+          studioStill: preset.studioStill,
         },
       });
     }

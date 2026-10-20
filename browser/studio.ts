@@ -1,14 +1,15 @@
-import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import { readOwnVideo } from "../vendor/web/src/lib/own-video";
+import { ImportError } from "../vendor/web/src/lib/import-progress";
 import { readStudioPhoto } from "../vendor/web/src/lib/studio-photo";
-import { captionTranscriber, speechPcm } from "../vendor/web/src/lib/captions-asr";
+import { captionTranscriber } from "../vendor/web/src/lib/captions-asr";
 import { captionLines, timelineWords } from "../vendor/web/src/lib/captions";
-import { createSilenceLevels, detectClipSilences } from "../vendor/web/src/lib/studio-silences";
+import { detectClipSilences } from "../vendor/web/src/lib/studio-silences";
+import { analyseSourceAudio, sourceHasAudio } from "../vendor/web/src/lib/studio-source";
 import { studioReducer, type StudioMedia, type StudioOverlay } from "../vendor/web/src/lib/studio-state";
 import { mediaById, studioTimeline } from "../vendor/web/src/lib/studio-projections";
-import { sourceOrigin, clipStarts, studioSize, timelineDuration } from "../vendor/web/src/lib/video-timeline";
+import { clipStarts, studioSize, timelineDuration } from "../vendor/web/src/lib/video-timeline";
 import { exportVideoTimeline } from "../vendor/web/src/lib/timeline-export";
-import { correctTranscript, editDocument, type EditInput } from "../src/studio-request";
+import { applyRapidIntro, applyWordStyles, correctTranscript, editDocument, type EditInput } from "../src/studio-request";
 import { ToolError } from "../src/errors";
 
 type BrowserRequest = { input: EditInput; media: { url: string; name: string; type: string; kind: "video" | "photo" }[]; overlays: { src: string; overlay: StudioOverlay }[]; transcriptOnly: boolean };
@@ -21,15 +22,21 @@ window.runStudio = async (request) => {
   const controller = new AbortController();
   const signal = controller.signal;
   const media: StudioMedia[] = [];
+  const levels = new Map<string, number[] | null>();
   const worker = request.input.captions === undefined && !request.transcriptOnly ? null : captionTranscriber(signal, () => {}, new URL("/captions-worker.js", location.origin));
   try {
     for (const [index, source] of request.media.entries()) {
       const response = await fetch(source.url);
       if (!response.ok) throw new Error("Local media could not be read");
       const file = new File([await response.blob()], source.name, { type: source.type });
-      const loaded = source.kind === "photo" ? { kind: "photo" as const, source: await readStudioPhoto(file, signal) }
-        : { kind: "video" as const, source: await readOwnVideo(file, signal, 180) };
-      media.push({ ...loaded, id: `media-${index}`, poster: "", filmstrip: [], waveform: null, silenceLevels: null });
+      let loaded;
+      try {
+        loaded = source.kind === "photo" ? { kind: "photo" as const, source: await readStudioPhoto(file, signal) }
+          : { kind: "video" as const, source: await readOwnVideo(file, signal, 180) };
+      } catch (error) {
+        throw error instanceof ImportError ? new Error(`${source.name} ${error.message}`) : error;
+      }
+      media.push({ ...loaded, id: `media-${index}`, poster: "", hasAudio: loaded.kind === "video" && await sourceHasAudio(file, signal) });
     }
     let state = editDocument(request.input, media);
     const warnings: string[] = [];
@@ -37,31 +44,18 @@ window.runStudio = async (request) => {
     for (const item of media) {
       if (item.kind === "photo" || !state.clips.some((clip) => clip.track === "v1" && clip.mediaId === item.id)) continue;
       if (worker !== null) {
-        const pcm = await speechPcm(item.source.file, item.source.duration, signal);
-        if (pcm !== null) {
-          const transcript = await worker.transcribe(pcm);
+        const transcript = await worker.transcribe(item.source.file, item.source.duration);
+        if (transcript.audio) {
           const corrections = request.input.captions === undefined || request.input.captions.corrections === undefined ? [] : request.input.captions.corrections;
           state.transcripts[item.id] = correctTranscript(transcript.words, corrections);
         }
       }
       if (request.input.remove_silences !== undefined) {
-        const input = new Input({ source: new BlobSource(item.source.file), formats: ALL_FORMATS });
-        try {
-          const audio = await input.getPrimaryAudioTrack();
-          const video = await input.getPrimaryVideoTrack();
-          if (video === null) throw new Error("Video picture is unavailable");
-          if (audio !== null) {
-            if (!(await audio.canDecode())) throw new Error("This browser cannot decode clip audio");
-            const origin = sourceOrigin(await video.getFirstTimestamp(), await audio.getFirstTimestamp());
-            const levels = createSilenceLevels(item.source.duration);
-            for await (const { buffer, timestamp } of new AudioBufferSink(audio).buffers()) {
-              await levels.add(Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel)), buffer.sampleRate, timestamp - origin, signal);
-            }
-            item.silenceLevels = levels.finish();
-          }
-        } finally { input.dispose(); }
+        const analysed = await analyseSourceAudio(item.source.file, item.source.duration, signal, () => {});
+        levels.set(item.id, analysed === null ? null : analysed.levels);
       }
     }
+    if (request.input.captions !== undefined && request.input.captions.word_styles !== undefined) state = applyWordStyles(state, request.input.captions.word_styles);
     if (request.transcriptOnly) {
       const lines = captionLines(timelineWords(state.clips, state.transcripts), "clean");
       const start = request.input.clips[0].in === undefined ? 0 : request.input.clips[0].in;
@@ -70,7 +64,12 @@ window.runStudio = async (request) => {
     if (request.input.remove_silences !== undefined) {
       const { sensitivity, shortest_pause } = request.input.remove_silences;
       const starts = clipStarts(state.clips);
-      const ranges = (await Promise.all(state.clips.map((clip, index) => clip.track !== "v1" || clip.kind === "photo" ? [] : detectClipSilences(mediaById(state.media, clip.mediaId).silenceLevels, clip, starts[index], sensitivity, shortest_pause, signal)))).flat();
+      const ranges = (await Promise.all(state.clips.map((clip, index) => {
+        if (clip.track !== "v1" || clip.kind === "photo") return [];
+        const found = levels.get(mediaById(state.media, clip.mediaId).id);
+        if (found === undefined) throw new Error("Silence levels are missing");
+        return detectClipSilences(found, clip, starts[index], sensitivity, shortest_pause, signal);
+      }))).flat();
       const next = studioReducer(state, { type: "remove-silences", ranges: ranges.map((range, index) => ({ ...range, newId: `silence-${index}` })) });
       if (next.message !== null) {
         if (next.clips === state.clips) throw new ToolError(next.message);
@@ -78,6 +77,7 @@ window.runStudio = async (request) => {
       }
       state = next;
     }
+    if (request.input.rapid_intro !== undefined) state = applyRapidIntro(state, request.input.rapid_intro);
     const longSide = request.input.quality === "720p" ? 1280 : 1920;
     const timeline = { ...studioTimeline(state), ...studioSize(state.aspect, longSide) };
     if (timelineDuration(timeline.clips) <= 0) throw new ToolError("Silence removal left no footage");

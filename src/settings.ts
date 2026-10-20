@@ -1,7 +1,7 @@
 import { homedir, platform } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 export const RENDERER_VERSION = "0.8.80";
 export const baseUrl = new URL(process.env.MODISIGN_URL ?? "https://modisign.app").origin;
 const origin = new URL(baseUrl);

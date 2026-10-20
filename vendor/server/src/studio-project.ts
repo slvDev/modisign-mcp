@@ -59,13 +59,83 @@ export const STUDIO_ASPECTS = ["9x16", "4x5", "1x1", "16x9"] as const;
 export const MAX_STUDIO_DURATION = 180;
 export const MAX_STUDIO_CLIPS = 300;
 export const MAX_STUDIO_PROJECT_BYTES = 64 * 1024;
-export const MIN_CLIP_DURATION = 0.2;
-export const MIN_PHOTO_DURATION = 0.5;
+// Three frames at the 30 fps Studio rate: the shortest visible cut of a clip or a photo.
+export const MIN_CLIP_DURATION = 3 / 30;
+export const MIN_PHOTO_DURATION = MIN_CLIP_DURATION;
+export const MIN_CLIP_LABEL = "3 frames (0.1 seconds)";
 export const MAX_PHOTO_DURATION = 30;
-export const CAPTION_STYLE_IDS = ["clean", "boxed", "minimal", "karaoke", "bold-keyword", "word-pop", "highlight-box", "neon", "pop-up", "typewriter", "outline", "editorial", "gradient"] as const;
+// Real bundled caption faces (variable OFL files); a weight or italic outside this table has no face to draw.
+export const CAPTION_FONTS = {
+  sans: { family: "Montserrat", weights: [500, 700, 800, 900], defaultWeight: 800, italic: false },
+  serif: { family: "Lora", weights: [400, 600, 700], defaultWeight: 600, italic: true },
+  mono: { family: "Roboto Mono", weights: [400, 500, 700], defaultWeight: 500, italic: false },
+} as const;
+export type CaptionFont = keyof typeof CAPTION_FONTS;
+export const CAPTION_FONT_IDS = Object.keys(CAPTION_FONTS) as CaptionFont[];
+export const TRACKING_RANGE = { min: -0.08, max: 0.3 } as const;
+export const LEADING_RANGE = { min: 1, max: 2 } as const;
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+// Sparse per-word overrides. A weight or italic belongs to a face, so both require the font they refer to.
+export type WordAppearance = {
+  font?: CaptionFont; weight?: number; italic?: boolean; fill?: string;
+  tracking?: number; leading?: number; underline?: boolean; highlight?: string | false;
+};
+const APPEARANCE_KEYS = ["font", "weight", "italic", "fill", "tracking", "leading", "underline", "highlight"];
+
+export function isCaptionColor(value: unknown): value is string {
+  return typeof value === "string" && HEX_COLOR.test(value);
+}
+export function isCaptionFace(font: unknown, weight: unknown, italic: unknown) {
+  if (typeof font !== "string" || !CAPTION_FONT_IDS.some((id) => id === font)) return false;
+  const face = CAPTION_FONTS[font as CaptionFont];
+  return (weight === undefined || (face.weights as readonly unknown[]).includes(weight)) && (italic === undefined || italic === false || (italic === true && face.italic));
+}
+export function isWordAppearance(value: unknown): value is WordAppearance {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 0 || keys.some((key) => !APPEARANCE_KEYS.includes(key))) return false;
+  const { font, weight, italic, fill, tracking, leading, underline, highlight } = value as Record<string, unknown>;
+  if (font === undefined ? weight !== undefined || italic !== undefined : !isCaptionFace(font, weight, italic)) return false;
+  return (!keys.includes("fill") || isCaptionColor(fill))
+    && (!keys.includes("highlight") || highlight === false || isCaptionColor(highlight))
+    && (!keys.includes("tracking") || range(tracking, TRACKING_RANGE.min, TRACKING_RANGE.max))
+    && (!keys.includes("leading") || range(leading, LEADING_RANGE.min, LEADING_RANGE.max))
+    && (!keys.includes("underline") || typeof underline === "boolean");
+}
+
+// A false underline or highlight only switches off something a style may not have; every other field changes the output.
+export function isEffectiveAppearance(appearance: WordAppearance) {
+  return Object.values(appearance).some((value) => value !== false);
+}
+
+export const CAPTION_MIX_PRESETS = ["creator", "editorial"] as const;
+export const MIX_PALETTE_SIZE = { min: 2, max: 4 } as const;
+// Per-word looks come from a pure hash of the seed and the source word id.
+export type CaptionMix = { preset: typeof CAPTION_MIX_PRESETS[number]; seed: number; palette: string[] };
+export function isCaptionMix(value: unknown): value is CaptionMix {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.keys(value).length !== 3) return false;
+  const { preset, seed, palette } = value as Record<string, unknown>;
+  return CAPTION_MIX_PRESETS.some((id) => id === preset)
+    && typeof seed === "number" && Number.isInteger(seed) && seed >= 0 && seed <= 0xffffffff
+    && Array.isArray(palette) && palette.length >= MIX_PALETTE_SIZE.min && palette.length <= MIX_PALETTE_SIZE.max && palette.every(isCaptionColor);
+}
+export const CAPTION_STYLE_IDS = ["clean", "boxed", "minimal", "karaoke", "bold-keyword", "word-pop", "highlight-box", "neon", "pop-up", "typewriter", "outline", "editorial", "gradient", "mixed"] as const;
 export type CaptionStyleId = typeof CAPTION_STYLE_IDS[number];
 export type CaptionPlacement = { position: "upper" | "center" | "lower"; size: "s" | "m" | "l" };
-export type CaptionSettings = CaptionPlacement & { style: CaptionStyleId };
+export const MAX_STUDIO_TEXTS = 100;
+export const MAX_TEXT_LENGTH = 120;
+// Fractions of the output's shorter side, so a title is as tall in 16:9 as in 9:16; the renderer wraps within 86% of the width.
+export const TEXT_SIZES = { s: 0.05, m: 0.07, l: 0.1, xl: 0.14 } as const;
+export const TEXT_TIMESTAMPS = ["source", "timeline"] as const;
+// A timestamp is a formatted mm:ss line drawn above the text; it never feeds timing.
+export type TextLabel = { text: string; timestamp?: typeof TEXT_TIMESTAMPS[number] };
+export type TextStyle = { font: CaptionFont; weight: number; italic: boolean; fill: string; size: keyof typeof TEXT_SIZES; x: number; y: number; backing: boolean };
+export const DEFAULT_TEXT_STYLE: Readonly<TextStyle> = { font: "sans", weight: 800, italic: false, fill: "#ffffff", size: "m", x: 0.5, y: 0.5, backing: false };
+// A saved title shows for its clip's whole span (`clip`, an index into the saved clips) or for an explicit post-overlap interval.
+export type ProjectText = TextLabel & TextStyle & ({ clip: number; start?: never; duration?: never } | { clip?: never; start: number; duration: number });
+// The mix recipe is saved with its style; individual word looks never are.
+export type CaptionSettings = CaptionPlacement & { style: CaptionStyleId; mix?: CaptionMix };
 export type ClipSettings = {
   frameMode: "fill" | "fit";
   centerX: number; centerY: number; zoom: number;
@@ -129,6 +199,7 @@ export type StudioProject = {
   clips: ProjectClip[];
   transitions?: (ClipTransition & { cut: number })[];
   captions?: CaptionSettings;
+  texts?: ProjectText[];
   overlays: { family: string; preset: string; start: number; configuration: string }[];
 };
 
@@ -157,8 +228,11 @@ function range(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
 export function isCaptionSettings(value: unknown): value is CaptionSettings {
-  return record(value, ["style", "position", "size"])
+  if (typeof value !== "object" || value === null) return false;
+  const mixed = Object.hasOwn(value, "mix");
+  return record(value, mixed ? ["style", "position", "size", "mix"] : ["style", "position", "size"])
     && CAPTION_STYLE_IDS.some((style) => style === value.style)
+    && (value.style === "mixed") === mixed && (!mixed || isCaptionMix(value.mix))
     && (value.position === "upper" || value.position === "center" || value.position === "lower")
     && (value.size === "s" || value.size === "m" || value.size === "l");
 }
@@ -194,12 +268,38 @@ export function isValidTrim(duration: number, inPoint: number, outPoint: number)
     && outPoint <= duration && outPoint - inPoint >= MIN_CLIP_DURATION - STUDIO_TIME_TOLERANCE;
 }
 
+const TEXT_STYLE_KEYS = ["font", "weight", "italic", "fill", "size", "x", "y", "backing"];
+export function isTextLabel(value: Readonly<Record<string, unknown>>) {
+  const stamped = value.timestamp !== undefined;
+  return (stamped ? TEXT_TIMESTAMPS.some((kind) => kind === value.timestamp) : true)
+    && (value.text === "" ? stamped : typeof value.text === "string" && text(value.text, MAX_TEXT_LENGTH));
+}
+export function isTextStyle(value: Readonly<Record<string, unknown>>) {
+  return isCaptionFace(value.font, value.weight, value.italic) && typeof value.weight === "number" && typeof value.italic === "boolean"
+    && isCaptionColor(value.fill) && typeof value.size === "string" && Object.hasOwn(TEXT_SIZES, value.size)
+    && range(value.x, 0, 1) && range(value.y, 0, 1) && typeof value.backing === "boolean";
+}
+export function isTextDuration(value: unknown): value is number {
+  return range(value, MIN_CLIP_DURATION - STUDIO_TIME_TOLERANCE, MAX_STUDIO_DURATION);
+}
+function isProjectText(value: unknown, clips: ProjectClip[], total: number): value is ProjectText {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const anchored = Object.hasOwn(value, "clip");
+  const keys = ["text", ...TEXT_STYLE_KEYS, ...(anchored ? ["clip"] : ["start", "duration"])];
+  if (Object.hasOwn(value, "timestamp")) keys.push("timestamp");
+  if (!record(value, keys) || !isTextLabel(value) || !isTextStyle(value)) return false;
+  if (!anchored) return value.timestamp === undefined && number(value.start) && isTextDuration(value.duration) && (total === 0 ? value.start === 0 : value.start < total);
+  const owner = typeof value.clip === "number" && Number.isInteger(value.clip) ? clips[value.clip] : undefined;
+  return owner !== undefined && (value.timestamp !== "source" || owner.kind === "video");
+}
+
 // The API supplies its startup catalog; the browser supplies the catalog loaded for Studio.
 export function isStudioProject(value: unknown, presets: ReadonlySet<string>): value is StudioProject {
   if (typeof value !== "object" || value === null) return false;
   const keys = ["name", "aspect", "clips", "overlays"];
   if (Object.hasOwn(value, "transitions")) keys.push("transitions");
   if (Object.hasOwn(value, "captions")) keys.push("captions");
+  if (Object.hasOwn(value, "texts")) keys.push("texts");
   if (!record(value, keys) || !text(value.name, 80)
     || !STUDIO_ASPECTS.some((aspect) => aspect === value.aspect)
     || !Array.isArray(value.clips) || value.clips.length > MAX_STUDIO_CLIPS
@@ -257,6 +357,10 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
       || (total === 0 ? overlay.start !== 0 : overlay.start >= total)) return false;
     if (!isTemplateHref(overlay.configuration)
       || !overlay.configuration.startsWith(`/overlays/${overlay.family}?`)) return false;
+  }
+  if (Object.hasOwn(value, "texts")) {
+    if (!Array.isArray(value.texts) || value.texts.length === 0 || value.texts.length > MAX_STUDIO_TEXTS) return false;
+    for (const title of value.texts) if (!isProjectText(title, project.clips, total)) return false;
   }
   return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_STUDIO_PROJECT_BYTES;
 }

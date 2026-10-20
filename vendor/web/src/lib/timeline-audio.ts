@@ -8,6 +8,13 @@ import { AudioBufferSink, AudioSample, AudioSampleSink, AudioSampleSource, Encod
 const AUDIO_RATE = 48_000;
 export type TimelineAudioPolicy = "normalize" | "preserve";
 
+// Normalized exports always carry AAC, even for photo-only or silent sequences.
+export async function requireNormalizedAudioEncoding() {
+  if (!(await canEncodeAudio("aac", { sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 }))) {
+    throw new Error("This browser cannot encode the AAC audio Studio exports need. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.");
+  }
+}
+
 export async function createTimelineAudio(input: Input | null, policy: TimelineAudioPolicy, duration?: number): Promise<{
   source: AudioSampleSource | EncodedAudioPacketSource | null;
   samples?: AudioWriter;
@@ -16,9 +23,7 @@ export async function createTimelineAudio(input: Input | null, policy: TimelineA
   append?: (input: Input | null, origin: number, offset: number, duration: number, signal: AbortSignal) => Promise<void>;
 }> {
   if (policy === "normalize") {
-    if (!(await canEncodeAudio("aac", { sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 }))) {
-      throw new Error("This browser cannot encode AAC audio. Use a recent Chrome or Edge on a computer.");
-    }
+    await requireNormalizedAudioEncoding();
     if (duration === undefined) throw new Error("Normalized audio requires a timeline duration");
     return normalizedAudio(duration);
   }

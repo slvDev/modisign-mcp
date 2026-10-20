@@ -1,6 +1,6 @@
 // generated from the Modisign monorepo, do not edit
 import { ASPECTS, type Aspect } from "@/lib/aspects";
-import { clipSchedule, TIMELINE_BOUNDARY_TOLERANCE, type VideoTrack, type ClipSpatial, clampTransition, type ClipTransition, type ClipSettings, type PunchIn } from "@/lib/studio-project";
+import { clipSchedule, TIMELINE_BOUNDARY_TOLERANCE, type VideoTrack, type ClipSpatial, clampTransition, type ClipTransition, type ClipSettings, type PunchIn, type TextStyle } from "@/lib/studio-project";
 import { clipGain } from "@/lib/clip-settings";
 import type { OwnPhoto } from "@/lib/studio-photo";
 import type { OwnVideo } from "@/lib/own-video";
@@ -19,6 +19,9 @@ export type TimelineOverlay = {
 };
 
 export type PreviewOverlay = TimelineOverlay & { id: string; liveValues?: Values };
+// A title resolved to output time: wrapped paragraphs (stamp first) shown from `start` until `end`.
+export type TimelineText = TextStyle & { paragraphs: string[]; start: number; end: number };
+
 export type VideoPreviewTimeline = Omit<VideoTimeline, "overlays"> & { overlays: PreviewOverlay[] };
 
 export type TimelineClip = ((OwnVideo & { kind: "video"; inPoint?: number; outPoint?: number })
@@ -42,6 +45,7 @@ export function clipDuration(clip: TimingClip) {
 export type VideoTimeline = {
   clips: TimelineClip[];
   overlays: TimelineOverlay[];
+  texts?: TimelineText[];
   captions?: CaptionSettings & { lines: CaptionLine[] };
   width: number;
   height: number;

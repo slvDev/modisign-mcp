@@ -1,4 +1,6 @@
 // generated from the Modisign monorepo, do not edit
+import { ImportError } from "@/lib/import-progress";
+
 export const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif";
 export const STUDIO_MEDIA_ACCEPT = `video/*,${PHOTO_ACCEPT}`;
 export type OwnPhoto = { file: File; url: string; width: number; height: number };
@@ -7,23 +9,26 @@ export function isPhotoFile(file: File) {
   return /^image\//i.test(file.type) || /\.(jpe?g|png|webp|avif|hei[cf])$/i.test(file.name);
 }
 
+const PHOTO_CHOICE = "Choose a JPEG, PNG, WebP or AVIF photo.";
+
+// Decodes the photo once; the caller closes the bitmap and owns the blob URL.
+export async function openStudioPhoto(file: File, signal: AbortSignal): Promise<{ photo: OwnPhoto; image: ImageBitmap }> {
+  if (/\.(hei[cf])$/i.test(file.name) || /^image\/hei[cf]/i.test(file.type)) throw new ImportError(`isn’t supported in Studio. ${PHOTO_CHOICE}`);
+  if (!/^image\/(jpeg|png|webp|avif)$/i.test(file.type) && !/\.(jpe?g|png|webp|avif)$/i.test(file.name)) throw new ImportError(`isn’t a supported photo format. ${PHOTO_CHOICE}`);
+  let image: ImageBitmap;
+  try { image = await createImageBitmap(file); } catch { throw new ImportError(`couldn’t be opened. The photo may be damaged. ${PHOTO_CHOICE}`); }
+  // createImageBitmap takes no signal, so a canceled decode that still resolves is closed here.
+  if (signal.aborted) image.close();
+  signal.throwIfAborted();
+  if (image.width <= 0 || image.height <= 0) {
+    image.close();
+    throw new ImportError(`has no readable picture. ${PHOTO_CHOICE}`);
+  }
+  return { photo: { file, url: URL.createObjectURL(file), width: image.width, height: image.height }, image };
+}
+
 export async function readStudioPhoto(file: File, signal: AbortSignal): Promise<OwnPhoto> {
-  const extension = file.name.split(".").at(-1);
-  if (/\.(hei[cf])$/i.test(file.name) || /^image\/hei[cf]/i.test(file.type)) throw new Error("This browser cannot read HEIC photos. Try JPEG, PNG, WebP or AVIF.");
-  if (!/^image\/(jpeg|png|webp|avif)$/i.test(file.type) && !/\.(jpe?g|png|webp|avif)$/i.test(file.name)) {
-    throw new Error(`This browser cannot read ${extension === undefined ? "this format" : extension.toUpperCase()} photos. Try JPEG, PNG, WebP or AVIF.`);
-  }
-  const url = URL.createObjectURL(file);
-  try {
-    const image = await createImageBitmap(file);
-    try {
-      signal.throwIfAborted();
-      if (image.width <= 0 || image.height <= 0) throw new Error("This photo has no readable picture.");
-      return { file, url, width: image.width, height: image.height };
-    } finally { image.close(); }
-  } catch (error) {
-    URL.revokeObjectURL(url);
-    if (signal.aborted) throw error;
-    throw new Error("This photo could not be opened. Try JPEG, PNG, WebP or AVIF.");
-  }
+  const { photo, image } = await openStudioPhoto(file, signal);
+  image.close();
+  return photo;
 }

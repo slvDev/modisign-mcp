@@ -1,5 +1,7 @@
 // generated from the Modisign monorepo, do not edit
 import { MIN_CLIP_DURATION } from "@/lib/studio-project";
+import { mediaById } from "@/lib/studio-projections";
+import type { StudioClip, StudioMedia } from "@/lib/studio-state";
 
 export const SILENCE_WINDOW = 0.02;
 export const SILENCE_PADDING = 0.12;
@@ -7,6 +9,20 @@ export const SILENCE_LEVELS = { gentle: -44, normal: -38, strong: -32 } as const
 export type SilenceSensitivity = keyof typeof SILENCE_LEVELS;
 export type SilenceRange = { start: number; end: number };
 export type ClipSilence = SilenceRange & { clipId: string; newId: string };
+export type SilenceSource = { id: string; file: File; duration: number };
+
+// The distinct linked V1 video sources with audio that a review decodes once each, and whether any V1 video clip lacks its media (which makes every result incomplete).
+export function silenceSources(clips: StudioClip[], media: StudioMedia[]) {
+  const sources: SilenceSource[] = [];
+  let missing = false;
+  for (const clip of clips) {
+    if (clip.track !== "v1" || clip.kind !== "video") continue;
+    if (clip.mediaId === null) { missing = true; continue; }
+    const item = mediaById(media, clip.mediaId);
+    if (item.kind === "video" && item.hasAudio && !sources.some((source) => source.id === item.id)) sources.push({ id: item.id, file: item.source.file, duration: item.source.duration });
+  }
+  return { sources, missing };
+}
 
 const yieldThread = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 

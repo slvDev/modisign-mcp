@@ -21,6 +21,8 @@ import { findInvalidValue, findLook, isPositive, type Look, mergeValues, type Ro
 const PUBLIC_DIR = join(process.cwd(), "public");
 
 export type Thumbnail = { poster: string; clip: string };
+// The transparent square Studio tile and its crop of the 1x1 composition, normalized to it.
+export type StudioStill = { url: string; x: number; y: number; width: number; height: number };
 
 export type Preset = {
   id: string;
@@ -34,7 +36,7 @@ export type Preset = {
   free: boolean;
   added: string;
   values: Values;
-} & ({ listed: true; thumbnail: Thumbnail } | { listed: false });
+} & ({ listed: true; thumbnail: Thumbnail; studioStill: StudioStill } | { listed: false });
 
 // A row's values may only set variables of the given roles.
 function checkValues(where: string, family: Family, values: unknown, roles: Role[]) {
@@ -83,7 +85,7 @@ export const loadPresets = cache(async (family: Family): Promise<Preset[]> => {
       if (color !== undefined) throw new Error(`${where}: preset color ${color.id} belongs in its palette`);
       const base = { id, name, niche, backdrop, look, duration, featured, free, added, values };
       if (!listed) return { ...base, listed };
-      return { ...base, listed, thumbnail: await findThumbnail(family.id, id) };
+      return { ...base, listed, thumbnail: await findThumbnail(family.id, id), studioStill: await findStudioStill(family.id, id) };
     }),
   );
   if (presets.filter((preset) => preset.free).length !== 1) throw new Error(`${family.id}: expected exactly one listed free preset`);
@@ -105,16 +107,32 @@ export async function loadListedPreset(familyId: Family["id"], presetId: string)
 }
 
 // Written by scripts/thumbnails.mjs.
+async function readGenerated(url: string) {
+  const content = await readFile(join(PUBLIC_DIR, url)).catch((cause: unknown) => {
+    throw new Error(`Missing ${url} for a listed preset: run pnpm thumbnails`, { cause });
+  });
+  return { content, version: createHash("sha256").update(content).digest("hex").slice(0, 12) };
+}
+
 async function findThumbnail(family: Family["id"], id: string): Promise<Thumbnail> {
   const [poster, clip] = await Promise.all(["jpg", "mp4"].map(async (extension) => {
     const url = `/thumbnails/${family}/${id}.${extension}`;
-    const content = await readFile(join(PUBLIC_DIR, url)).catch((cause: unknown) => {
-      throw new Error(`Missing ${url} for a listed preset: run pnpm thumbnails`, { cause });
-    });
-    const version = createHash("sha256").update(content).digest("hex").slice(0, 12);
-    return `${url}?v=${version}`;
+    return `${url}?v=${(await readGenerated(url)).version}`;
   }));
   return { poster, clip };
+}
+
+async function findStudioStill(family: Family["id"], id: string): Promise<StudioStill> {
+  const url = `/thumbnails/${family}/${id}.studio.png`;
+  const where = `${family}/${id}.studio`;
+  const [{ version }, { content }] = await Promise.all([readGenerated(url), readGenerated(`/thumbnails/${family}/${id}.studio.json`)]);
+  const { image, x, y, width, height } = JSON.parse(content.toString("utf8"));
+  if (image !== version) throw new Error(`${where}: bounds belong to another image: run pnpm thumbnails`);
+  for (const [name, value] of Object.entries({ x, y, width, height })) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${where}: bad ${name}`);
+  }
+  if (!(width > 0 && height > 0 && x + width <= 1 + 1e-6 && y + height <= 1 + 1e-6)) throw new Error(`${where}: bounds leave the square`);
+  return { url: `${url}?v=${version}`, x, y, width, height };
 }
 
 export function presetConfig(family: Family, looks: Look[], preset: Preset, aspect: Aspect = "9x16"): TemplateConfig {
