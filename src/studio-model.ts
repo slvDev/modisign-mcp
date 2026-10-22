@@ -5,15 +5,17 @@ import { SPEECH_FILES, SPEECH_MODEL, SPEECH_REVISION } from "../vendor/web/src/l
 import { speechCacheDir } from "./settings.js";
 import { isMissing, ToolError } from "./errors.js";
 
-export async function speechModel(signal: AbortSignal) {
+// onDownload reports each missing file (index of total) before it is fetched.
+export async function speechModel(signal: AbortSignal, onDownload: (index: number, total: number) => void) {
   const directory = join(speechCacheDir, SPEECH_REVISION);
   const routes = new Map<string, string>();
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  for (const file of SPEECH_FILES) {
+  for (const [index, file] of SPEECH_FILES.entries()) {
     signal.throwIfAborted();
     const target = join(directory, file.replaceAll("/", "-"));
     routes.set(`/models/${SPEECH_MODEL}/resolve/${SPEECH_REVISION}/${file}`, target);
     try { await readFile(target); continue; } catch (error) { if (!isMissing(error)) throw error; }
+    onDownload(index, SPEECH_FILES.length);
     let url = new URL(`https://huggingface.co/${SPEECH_MODEL}/resolve/${SPEECH_REVISION}/${file}`);
     let response: Response | undefined;
     for (let redirects = 0; redirects <= 5; redirects++) {

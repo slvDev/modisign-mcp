@@ -160,6 +160,9 @@ test('automatic sounds use the final structure, the default plan and report what
   assert.equal(first.state.sfx[0], state.sfx[0], 'manual rows are untouched');
   assert.deepEqual(first.state.sfx.slice(1).map(sound => [sound.auto, 'anchor' in sound.timing && sound.timing.anchor.kind]), [['ugc-1', 'transition'], ['ugc-1', 'transition']]);
   assert.match(first.notes[0], /^Added 2 automatic sounds/);
+  const added = first.notes.filter(note => note.startsWith('Added ') && !note.startsWith('Added 2'));
+  assert.equal(added.length, 2, 'one line per added sound');
+  for (const [line, sound] of added.map((line, index) => [line, first.state.sfx[index + 1]])) assert.match(line, new RegExp(`^Added ${sound.asset} for (Crossfade|Dip to black), .+ to .+ \\((crossfade midpoint|dip cut point)\\) at \\d+\\.\\d{2} s\\.$`));
   assert.deepEqual(applyAutoSfx(state, { events: ['transition'], intensity: 'subtle', seed: 7 }).state.sfx, first.state.sfx, 'the same request gives the same rows');
   const loud = applyAutoSfx(state, { events: ['transition'], intensity: 'normal', seed: 7 }).state.sfx;
   assert.ok(loud[1].gain > first.state.sfx[1].gain, 'subtle plays quieter');

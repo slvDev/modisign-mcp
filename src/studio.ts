@@ -16,7 +16,7 @@ import { motionIsIdentity } from "../vendor/web/src/lib/studio-project.js";
 import { titleEffectsOn } from "../vendor/web/src/lib/studio-text.js";
 
 export type StudioInput = EditInput & { kind: "studio" };
-const PERSON_STATES = { model: "preparing_people_model", masks: "preparing_people_masks" } as const;
+const STAGE_STATES = { model: "preparing_people_model", masks: "preparing_people_masks", captions: "preparing_captions" } as const;
 // Only fixed ids and booleans leave the machine: curves, times, text and paths never do.
 const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration),
   overlayMotionCustomized: input.overlays !== undefined && input.overlays.some((overlay) => !motionIsIdentity(overlay.motion)),
@@ -89,15 +89,15 @@ async function runStudioPage(edit: EditInput, media: Awaited<ReturnType<typeof l
     routes.set(url, item.path);
     return { url, name: basename(item.path), type: item.type, kind: item.info.kind };
   });
-  if (edit.captions !== undefined || transcriptOnly) for (const [route, path] of await speechModel(signal)) routes.set(route, path);
+  if (edit.captions !== undefined || transcriptOnly) for (const [route, path] of await speechModel(signal, (index, total) => update("downloading_speech_model", 0.02 + 0.07 * index / total))) routes.set(route, path);
   if (edit.texts !== undefined && edit.texts.some((title) => title.occlusion !== undefined)) for (const [route, path] of personRoutes()) routes.set(route, path);
   const browser = await studioBrowser(routes, signal, update);
-  // The person stages replace "rendering" in job_status while the people model loads or masks are made.
-  let stage: typeof PERSON_STATES[keyof typeof PERSON_STATES] | null = null;
+  // These stages replace "rendering" in job_status while captions are prepared or the people model loads or masks are made.
+  let stage: typeof STAGE_STATES[keyof typeof STAGE_STATES] | null = null;
   let fraction = 0.1;
   try {
     await browser.page.exposeFunction("studioProgress", (value: number) => { fraction = value; update(stage ?? "rendering", value); });
-    await browser.page.exposeFunction("studioStage", (next: keyof typeof PERSON_STATES | null) => { stage = next === null ? null : PERSON_STATES[next]; update(stage ?? "rendering", fraction); });
+    await browser.page.exposeFunction("studioStage", (next: keyof typeof STAGE_STATES | null) => { stage = next === null ? null : STAGE_STATES[next]; update(stage ?? "rendering", fraction); });
     await browser.page.exposeFunction("studioWrite", async (base64: string) => {
       signal.throwIfAborted();
       if (output === undefined) throw new Error("Transcript has no output file");

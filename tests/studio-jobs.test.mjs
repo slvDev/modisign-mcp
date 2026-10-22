@@ -100,6 +100,13 @@ test('two-track jobs preserve authorization privacy, output collisions and stage
         assert.deepEqual(await readdir(output), []);
       });
     }
+    await t.test('a first caption run reports the speech model download and caption preparation instead of rendering', async () => {
+      const seen = [];
+      const job = await jobs.start(request('model-stages.mp4', { captions: { style: 'clean', ...placement } }), async snapshot => { if (seen.at(-1) !== snapshot.state) seen.push(snapshot.state); });
+      await finished(jobs, job.job_id);
+      assert.ok(seen.indexOf('downloading_speech_model') !== -1 && seen.indexOf('downloading_speech_model') < seen.indexOf('preparing_captions'), seen.join(' > '));
+      assert.deepEqual(await readdir(output), []);
+    });
     for (const [stage, codec, method] of [['decoder', 'VideoDecoder', 'decode'], ['encoding', 'VideoEncoder', 'encode']]) {
       await t.test(`${stage} cancellation cleans scratch files`, async () => {
         const reached = Promise.withResolvers();

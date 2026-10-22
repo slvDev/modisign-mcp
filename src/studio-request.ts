@@ -326,9 +326,10 @@ export function applyAutoSfx(state: StudioState, request: EditAutoSfx): { state:
     intensity: request.intensity === undefined ? DEFAULT_AUTO_SFX_OPTIONS.intensity : request.intensity, titleSound: request.title_sound === undefined ? DEFAULT_AUTO_SFX_OPTIONS.titleSound : request.title_sound };
   const review = buildAutoSfx(state, options);
   const chosen = review.candidates.filter((candidate) => candidate.selected);
-  const left = [...review.candidates.filter((candidate) => !candidate.selected).map((candidate) => `${candidate.owner}: ${candidate.unselectedReason}`), ...review.exclusions.map((item) => `${item.owner}: ${item.reason}`)];
+  const left = [...review.candidates.filter((candidate) => !candidate.selected).map((candidate) => `Skipped ${candidate.owner}: ${candidate.unselectedReason}`), ...review.exclusions.map((item) => `Skipped ${item.owner}: ${item.reason}`)];
+  const added = chosen.map((candidate) => `Added ${candidate.sfx.asset} for ${candidate.owner} (${candidate.reason.toLowerCase()}) at ${candidate.eventTime.toFixed(2)} s.`);
   const warnings = chosen.flatMap((candidate) => candidate.warnings.map((warning) => `${candidate.owner}: ${warning}`));
-  const notes = [chosen.length === 0 ? "No eligible events, so no automatic sounds were added." : `Added ${chosen.length} automatic sound${chosen.length === 1 ? "" : "s"}${left.length === 0 ? "" : `; skipped ${left.length}`}.`, ...left, ...warnings];
+  const notes = [chosen.length === 0 ? "No eligible events, so no automatic sounds were added." : `Added ${chosen.length} automatic sound${chosen.length === 1 ? "" : "s"}${left.length === 0 ? "" : `; skipped ${left.length}`}.`, ...added, ...left, ...warnings];
   if (chosen.length === 0) return { state, notes };
   const next = studioReducer(state, autoSfxAction(review));
   if (next.sfx === state.sfx) throw new ToolError(`Automatic sounds were not added: ${next.message === null ? "the edit changed" : next.message}`, { field: "auto_sfx" });

@@ -33,7 +33,7 @@ type BrowserRequest = { input: EditInput; media: { url: string; name: string; ty
 declare global { interface Window {
   runStudio: (request: BrowserRequest) => Promise<unknown>;
   studioProgress: (fraction: number) => Promise<void>;
-  studioStage: (stage: PersonPrepareStage | null) => Promise<void>;
+  studioStage: (stage: PersonPrepareStage | "captions" | null) => Promise<void>;
   studioWrite: (base64: string) => Promise<void>;
 } }
 window.runStudio = async (request) => {
@@ -61,9 +61,14 @@ window.runStudio = async (request) => {
     const warnings: string[] = [];
     state.overlays = request.overlays.map((item) => item.overlay);
     state.sfx = mapSfx(request.input, state);
+    // Loading the speech model and transcribing can take a while on a first run, so the host names it instead of "rendering".
+    const captioned = media.filter((item) => item.kind === "video" && state.clips.some((clip) => clip.track === "v1" && clip.mediaId === item.id));
+    let transcribed = 0;
     for (const item of media) {
       if (item.kind === "photo" || !state.clips.some((clip) => clip.track === "v1" && clip.mediaId === item.id)) continue;
       if (worker !== null) {
+        await window.studioStage("captions");
+        await window.studioProgress(0.1 + 0.1 * transcribed++ / captioned.length);
         const transcript = await worker.transcribe(item.source.file, item.source.duration);
         if (transcript.audio) {
           const corrections = request.input.captions === undefined || request.input.captions.corrections === undefined ? [] : request.input.captions.corrections;
@@ -75,6 +80,7 @@ window.runStudio = async (request) => {
         levels.set(item.id, analysed === null ? null : analysed.levels);
       }
     }
+    if (worker !== null) await window.studioStage(null);
     if (request.input.captions !== undefined && request.input.captions.word_styles !== undefined) state = applyWordStyles(state, request.input.captions.word_styles);
     if (request.transcriptOnly) {
       const lines = captionLines(timelineWords(state.clips, state.transcripts), "clean");

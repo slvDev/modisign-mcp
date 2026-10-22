@@ -8,7 +8,8 @@ import { ApiError, denied, errorResult } from '../dist/errors.js';
 import { compositeArguments, renderArguments, videoInfo } from '../dist/render.js';
 import { outputConfiguration } from '../dist/overlays.js';
 import { configDirectory } from '../dist/settings.js';
-import { installFfmpeg, rendererEnv } from '../dist/processes.js';
+import { failureCause, installFfmpeg, rendererEnv } from '../dist/processes.js';
+import { jobSummary } from '../dist/jobs.js';
 import { closestVideoAspect, overlayStartLimit } from '../dist/own-video.js';
 import { windowsPrivacyArguments } from '../dist/credentials-privacy.js';
 import { isolatedBrowserArguments } from '../dist/render-isolation.js';
@@ -110,8 +111,8 @@ test('output background changes do not change overlay content', () => {
 test('API errors preserve field errors, auth guidance distinguishes sign-in and Pro', () => {
   const fields = [{ field: 'values.setup', allowed: { maxLength: 44 } }];
   assert.deepEqual(errorResult(new ApiError(400, { error: 'Invalid MCP input', fields })).fields, fields);
-  assert.equal(errorResult(denied('sign_in')).reason, 'sign_in');
-  assert.equal(errorResult(denied('pro')).upgrade_url, 'https://modisign.app/pricing');
+  assert.equal(errorResult(denied('sign_in', 'This overlay configuration')).reason, 'sign_in');
+  assert.equal(errorResult(denied('pro', 'This overlay configuration')).upgrade_url, 'https://modisign.app/pricing');
   assert.equal(errorResult(new Error('secret-token')).error.includes('secret-token'), false);
 });
 test('OS install and config paths are explicit', () => {
@@ -121,4 +122,26 @@ test('OS install and config paths are explicit', () => {
   assert.equal(configDirectory('linux', '/home/user'), '/home/user/.config/modisign');
   assert.equal(configDirectory('win32', '/unused', '/appdata'), '/appdata/modisign');
   assert.throws(() => configDirectory('win32', '/unused', undefined), /APPDATA/);
+});
+test('failed renderer jobs keep a path-free cause and never point at a missing file', () => {
+  const failed = (...lines) => ['◆ Rendering', '✗  Render failed', '', ...lines.map(line => `   ${line}`)].join('\n');
+  for (const [output, cause] of [
+    [failed('Render files must stay inside their cache or staging directory.', 'Try --docker for containerized rendering'), 'Render files must stay inside their cache or staging directory.'],
+    [failed('Cannot read /Users/jane doe/Movies/Modisign/.modisign-x/overlay.mp4 for output'), 'Cannot read <path>'],
+    [failed("Cannot read /Users/o'brien/Movies/Modisign/x.html for output"), 'Cannot read <path>'],
+    [failed('Cannot read "/Users/jane doe/it\'s here/x.html" now'), 'Cannot read "<path>'],
+    [failed('Cannot read C:\\Users\\John Doe\\Movies\\x.mp4'), 'Cannot read <path>'],
+    [failed('Cannot read \\\\server\\share\\John Doe\\x.mp4'), 'Cannot read <path>'],
+    [failed('Cannot read ~/Movies/x.mp4 and/or retry'), 'Cannot read <path>'],
+    [failed('Use either/or, then 1 / 2 steps'), 'Use either/or, then 1 / 2 steps'],
+    [failed('Try --docker for containerized rendering'), undefined],
+    ['no failure banner', undefined],
+  ]) assert.equal(failureCause(output), cause);
+  const base = { job_id: 'j1', progress: 0.3 };
+  assert.equal(jobSummary({ ...base, state: 'failed', error: { error: 'The renderer failed (exit 1): Out of memory.' } }), 'Video job j1 failed: The renderer failed (exit 1): Out of memory.');
+  assert.equal(jobSummary({ ...base, state: 'done', artifact: { path: '/out/a.mp4' } }), 'Video job j1 done. Saved /out/a.mp4.');
+  assert.equal(jobSummary({ ...base, state: 'done', artifact: { path: '/out/a.mp4' }, warnings: ['Added 1 automatic sound.', 'Added ugc-pop-01 for Title "Hi" (title appears) at 0.50 s.'] }), 'Video job j1 done. Saved /out/a.mp4. Added 1 automatic sound. Added ugc-pop-01 for Title "Hi" (title appears) at 0.50 s.');
+  assert.match(jobSummary({ ...base, state: 'canceled' }), /No file was produced/);
+  assert.match(jobSummary({ ...base, state: 'rendering' }), /rendering\. Use job_status/);
+  for (const state of ['failed', 'canceled']) assert.doesNotMatch(jobSummary({ ...base, state, error: { error: 'x' } }), /retrieve the local file|local file/);
 });

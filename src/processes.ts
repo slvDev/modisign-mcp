@@ -15,6 +15,15 @@ delete rendererEnv.PRODUCER_HEADLESS_SHELL_PATH;
 export function installFfmpeg(os = process.platform) {
   return os === "darwin" ? "brew install ffmpeg" : os === "win32" ? "winget install Gyan.FFmpeg" : "sudo apt install ffmpeg";
 }
+// The renderer prints its reason on the first line under "Render failed"; keep that line with everything from the first local path (quoted, drive or UNC) on replaced by <path>.
+export function failureCause(output: string) {
+  const lines = output.split("\n");
+  const at = lines.findLastIndex((line) => line.includes("Render failed"));
+  if (at === -1) return undefined;
+  const cause = lines.slice(at + 1).map((line) => line.trim()).find((line) => line !== "");
+  if (cause === undefined || cause.startsWith("Try --")) return undefined;
+  return cause.replace(/(?<!\w)(?:[A-Za-z]:[\\/]|\\\\|~?\/)\S.*$/, "<path>").slice(0, 300);
+}
 export async function run(executable: string, args: string[], options: { signal?: AbortSignal; cwd?: string; onOutput?: (chunk: string) => void; timeout?: number } = {}) {
   const signal = AbortSignal.any([AbortSignal.timeout(options.timeout ?? 10 * 60_000), ...(options.signal === undefined ? [] : [options.signal])]);
   signal.throwIfAborted();
@@ -44,7 +53,11 @@ export async function run(executable: string, args: string[], options: { signal?
       signal.removeEventListener("abort", terminate);
       if (killTimer !== undefined) clearTimeout(killTimer);
       if (signal.aborted) { reject(signal.reason); return; }
-      if (code !== 0) { reject(new ToolError(`${executable === process.execPath ? "The renderer" : executable} failed (exit ${code}). Run modisign-mcp doctor and retry.`)); return; }
+      if (code !== 0) {
+        const cause = executable === process.execPath ? failureCause(output) : undefined;
+        reject(new ToolError(cause === undefined ? `${executable === process.execPath ? "The renderer" : executable} failed (exit ${code}). Run modisign-mcp doctor and retry.` : `The renderer failed (exit ${code}): ${cause}`));
+        return;
+      }
       resolve(output);
     });
     if (signal.aborted) terminate();

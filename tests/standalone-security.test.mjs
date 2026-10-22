@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import { createServer as createTcpServer, Server } from 'node:net';
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -70,6 +70,25 @@ test('standalone isolation pins cache files before compilation and exposes only 
     await assert.rejects(prepareStandaloneRender(outside, work), /inside/);
     const escaped = join(cacheDir, 'escaped'); await symlink(outside, escaped);
     await assert.rejects(prepareStandaloneRender(escaped, work), /inside/);
+  });
+  await t.test('a symlinked output directory (macOS /tmp) serves, while escapes and symlinked compiled directories still fail', async t => {
+    const { directory, work } = await fixture(t);
+    const alias = `${work}-alias`;
+    await symlink(work, alias);
+    t.after(() => rm(alias, { force: true }));
+    const render = await prepareStandaloneRender(directory, await realpath(work));
+    t.after(render.close);
+    await mkdir(join(work, 'compiled'));
+    await writeFile(join(work, 'compiled', 'index.html'), 'compiled private text');
+    const server = await render.serve(render.directory, join(alias, 'compiled'), html => html);
+    assert.deepEqual(await get(server, '/index.html'), { status: 200, body: 'compiled private text' });
+    server.close();
+    const outside = await mkdtemp(join(root, 'outside-'));
+    await mkdir(join(outside, 'compiled')); await writeFile(join(outside, 'compiled', 'index.html'), 'outside');
+    const escaped = join(work, 'escaped'); await symlink(outside, escaped);
+    await assert.rejects(render.serve(render.directory, join(escaped, 'compiled'), html => html), /inside/);
+    await rm(join(work, 'compiled'), { recursive: true }); await symlink(join(outside, 'compiled'), join(work, 'compiled'));
+    await assert.rejects(render.serve(render.directory, join(alias, 'compiled'), html => html), /inside|Unexpected/);
   });
   await t.test('an unpatched upstream cannot open an HTTP or TCP listener', async t => {
     const { directory, work } = await fixture(t);

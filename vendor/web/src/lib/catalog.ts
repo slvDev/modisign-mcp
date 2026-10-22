@@ -27,14 +27,14 @@ export const SORTS = { new: "Newest", likes: "Most liked" } as const;
 export type Sort = keyof typeof SORTS;
 export const isSort = (id: string): id is Sort => Object.hasOwn(SORTS, id);
 
-export const CATALOG_FILTER_KEYS = ["type", "niche", "q", "sort"] as const satisfies readonly (keyof CatalogFilters)[];
+export const CATALOG_FILTER_KEYS = ["type", "niche", "q", "sort", "free"] as const satisfies readonly (keyof CatalogFilters)[];
 
 // Fixed key order, so one filter set always has one URL.
 export function catalogParams(filters: CatalogFilters) {
   const params = new URLSearchParams();
   for (const key of CATALOG_FILTER_KEYS) {
     const value = filters[key];
-    if (value !== undefined) params.set(key, value);
+    if (value !== undefined) params.set(key, String(value));
   }
   return params;
 }

@@ -149,3 +149,25 @@ test('overlay and Studio authorization use exact free-cache identities and fail 
   await assert.rejects(resolveConfiguration(configuration + 'Miss', new AbortController().signal), /no listed presets/);
   assert.equal(requests, before + 1);
 });
+
+test('anonymous and free denials name the Pro part of the request and the way to sign in', async (t) => {
+  const { authorizeRequest } = await import('../dist/authorization.js');
+  let reason = 'sign_in';
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ v: 1, allowed: false, tier: 'pro', reason }));
+  const studio = { kind: 'studio', configurations: [], overlayMotionCustomized: false, captionStyle: 'clean', captionCustomized: false, titleEffects: false };
+  for (const [body, subject] of [
+    [{ configuration: '/overlays/hook-title?setup=Custom' }, /^This overlay configuration needs Pro\./],
+    [{ ...studio, titleEffects: true }, /^This edit uses a title effect \(reveal or behind person\), which needs Pro\./],
+    [{ ...studio, overlayMotionCustomized: true, captionCustomized: true }, /^This edit uses custom caption word styles, motion on a catalog overlay, which needs Pro\./],
+    [studio, /^This edit's overlay configuration or caption style needs Pro\./],
+  ]) {
+    for (reason of ['sign_in', 'pro']) {
+      await assert.rejects(authorizeRequest(body, `denial:${JSON.stringify(body)}:${reason}`), error => {
+        assert.match(error.message, subject);
+        assert.match(error.message, reason === 'sign_in' ? /login.*retry/ : /Upgrade at https:\/\/modisign\.app\/pricing/);
+        assert.equal(error.details.reason, reason);
+        return true;
+      });
+    }
+  }
+});

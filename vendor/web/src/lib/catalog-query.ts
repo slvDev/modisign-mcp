@@ -25,7 +25,8 @@ export async function loadStudioFamilies(): Promise<StudioFamily[]> {
 
 const CATALOG_PAGE_SIZE = 24;
 
-export type CatalogFilters = { type?: FamilyId; niche?: Niche; q?: string; sort?: Sort };
+// `free` is only ever `true` in a URL: absent means every preset.
+export type CatalogFilters = { type?: FamilyId; niche?: Niche; q?: string; sort?: Sort; free?: true };
 type CatalogQuery = CatalogFilters & { cursor?: string };
 
 const CATALOG_PARAMS: Record<keyof CatalogQuery, (value: string, params: URLSearchParams) => boolean> = {
@@ -33,6 +34,7 @@ const CATALOG_PARAMS: Record<keyof CatalogQuery, (value: string, params: URLSear
   niche: isNiche,
   q: (q) => q !== "" && q === q.trim() && q.length <= MAX_QUERY_LENGTH && !CONTROL_CHARS.test(q),
   sort: isSort,
+  free: (free) => free === "true",
   // A cursor belongs to one order.
   cursor: (cursor, params) => decodeCursor(cursor, params.get("sort")) !== undefined,
 };
@@ -46,7 +48,8 @@ export function parseCatalogQuery(params: URLSearchParams): CatalogQuery | undef
   for (const [key, value] of params) {
     if (!isCatalogParam(key) || !CATALOG_PARAMS[key](value, params)) return undefined;
   }
-  return Object.fromEntries(params) as CatalogQuery;
+  const { free, ...rest } = Object.fromEntries(params) as Omit<CatalogQuery, "free"> & { free?: "true" };
+  return free === undefined ? rest : { ...rest, free: true };
 }
 
 // Newest rounds restart for each date; other orders use the whole filtered cohort.
@@ -101,7 +104,7 @@ export type CatalogItem = {
 } & Thumbnail & { studioStill: StudioStill };
 
 // Listed presets in compareKeys order; every word of q must appear in the name, niche, family name or text values.
-export async function listPresets({ type, niche, q, sort, cursor, free, paginate = true }: CatalogQuery & { free?: boolean; paginate?: boolean }) {
+export async function listPresets({ type, niche, q, sort, cursor, free, paginate = true }: Omit<CatalogQuery, "free"> & { free?: boolean; paginate?: boolean }) {
   const after = cursor === undefined ? undefined : decodeCursor(cursor, sort);
   const words = q === undefined ? [] : q.toLowerCase().split(/\s+/);
   const counts = sort === "likes" ? await loadLikeCounts() : {};

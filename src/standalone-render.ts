@@ -55,11 +55,12 @@ export async function prepareStandaloneRender(directory: string, stagingParent: 
         if (closing !== undefined || projectDir !== staging) throw new ToolError("Unexpected standalone render project.");
         // HyperFrames stages Windows captures in system temp instead of beside the output.
         const workRoot = process.platform === "win32" ? tmpdir() : stagingParent;
-        requireInside(resolve(workRoot), resolve(compiledDir));
+        // The output directory may be a symlink alias (macOS /tmp); compare canonical paths, still strictly inside the work root.
         const compiledRoot = await realpath(workRoot);
-        const expected = join(compiledRoot, relative(resolve(workRoot), resolve(compiledDir)));
-        if (await realpath(compiledDir) !== expected || basename(compiledDir) !== "compiled") throw new ToolError("Unexpected compiled render directory.");
-        const index = await pinFile(join(compiledDir, "index.html"), compiledRoot);
+        const compiled = await realpath(compiledDir);
+        requireInside(compiledRoot, compiled);
+        if (basename(compiledDir) !== "compiled" || !(await lstat(compiledDir)).isDirectory()) throw new ToolError("Unexpected compiled render directory.");
+        const index = await pinFile(join(compiled, "index.html"), compiledRoot);
         let rawHtml: string;
         try {
           const chunks: Buffer[] = [];

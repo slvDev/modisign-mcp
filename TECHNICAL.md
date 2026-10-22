@@ -2,7 +2,7 @@
 
 ## Render browser
 
-The renderer downloads its managed render browser on first render if needed (~100 MB; up to 120 MB depending on OS). The job reports `downloading_browser` while ensuring it, before `rendering`. A render with a title behind people reports `preparing_people_model` while the bundled people runtime starts and `preparing_people_masks` while masks are made, then `rendering` again. Doctor checks that managed build rather than a system browser. Linux also needs the render browser's system libraries.
+The renderer downloads its managed render browser on first render if needed (~100 MB; up to 120 MB depending on OS). The job reports `downloading_browser` while ensuring it, before `rendering`. A render with a title behind people reports `preparing_people_model` while the bundled people runtime starts and `preparing_people_masks` while masks are made, then `rendering` again. A request with captions reports `downloading_speech_model` while the English speech model is first downloaded and `preparing_captions` while it loads and transcribes, before `rendering`. Doctor checks that managed build rather than a system browser. Linux also needs the render browser's system libraries.
 
 Linux ARM64 instead needs system Chromium (`sudo apt install chromium`); doctor checks that binary and no managed download is attempted. Run `npx -y @modisign/mcp doctor` to inspect your setup. No FFmpeg binary ships with this package.
 

@@ -9,9 +9,11 @@ export class ApiError extends ToolError {
 export class OfflineError extends ToolError {
   constructor() { super("Cannot reach Modisign. Check your connection and MODISIGN_URL."); }
 }
-export function denied(reason: string) {
-  if (reason === "sign_in") return new ToolError("Sign in with the login tool or run npx -y @modisign/mcp login, then retry.", { reason, login_command: "npx -y @modisign/mcp login" });
-  if (reason === "pro") return new ToolError("This overlay configuration needs Pro. Upgrade at https://modisign.app/pricing, then retry.", { reason, upgrade_url: "https://modisign.app/pricing" });
+const upgradeUrl = "https://modisign.app/pricing";
+// subject starts a sentence and takes "needs Pro": a sign_in denial is always for a Pro request, since free ones never ask for an account.
+export function denied(reason: string, subject: string) {
+  if (reason === "sign_in") return new ToolError(`${subject} needs Pro. Sign in with the login tool or run npx -y @modisign/mcp login, then retry (upgrade at ${upgradeUrl} if the account is not Pro).`, { reason, login_command: "npx -y @modisign/mcp login", upgrade_url: upgradeUrl });
+  if (reason === "pro") return new ToolError(`${subject} needs Pro. Upgrade at ${upgradeUrl}, then retry.`, { reason, upgrade_url: upgradeUrl });
   return new ToolError("Modisign did not authorize this render.", { reason });
 }
 export function errorResult(error: unknown): Record<string, unknown> {

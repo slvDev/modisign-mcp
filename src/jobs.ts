@@ -3,12 +3,19 @@ import { errorResult, ToolError } from "./errors.js";
 import { render, validateRender, type Artifact, type RenderInput, type Update } from "./render.js";
 import { renderStudio, validateStudio, type StudioInput } from "./studio.js";
 
-export type JobState = "queued" | "downloading_browser" | "rendering" | "compositing" | "preparing_people_model" | "preparing_people_masks" | "done" | "failed" | "canceled";
-type Snapshot = { job_id: string; state: JobState; progress: number; aspect?: string; artifact?: Artifact; warnings?: string[]; error?: Record<string, unknown> };
+export type JobState = "queued" | Parameters<Update>[0] | "done" | "failed" | "canceled";
+export type Snapshot = { job_id: string; state: JobState; progress: number; aspect?: string; artifact?: Artifact; warnings?: string[]; error?: Record<string, unknown> };
 type JobInput = RenderInput | StudioInput;
 const isStudio = (input: JobInput): input is StudioInput => "kind" in input && input.kind === "studio";
 type Job = { snapshot: Snapshot; input: JobInput; controller: AbortController; notify?: (snapshot: Snapshot) => Promise<void> };
 const terminal = (state: JobState) => ["done", "failed", "canceled"].includes(state);
+export function jobSummary(job: Snapshot) {
+  const prefix = `Video job ${job.job_id}`;
+  if (job.state === "done") return `${prefix} done.${job.artifact === undefined ? "" : ` Saved ${job.artifact.path}.`}${job.warnings === undefined || job.warnings.length === 0 ? "" : ` ${job.warnings.join(" ")}`}`;
+  if (job.state === "failed") return `${prefix} failed: ${String(job.error?.error)}`;
+  if (job.state === "canceled") return `${prefix} canceled. No file was produced.`;
+  return `${prefix}: ${job.state}. Use job_status to check progress and get the local file.`;
+}
 export class Jobs {
   private jobs = new Map<string, Job>();
   private queue: Job[] = [];
