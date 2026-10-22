@@ -133,7 +133,8 @@ export type TextLabel = { text: string; timestamp?: typeof TEXT_TIMESTAMPS[numbe
 export type TextStyle = { font: CaptionFont; weight: number; italic: boolean; fill: string; size: keyof typeof TEXT_SIZES; x: number; y: number; backing: boolean };
 export const DEFAULT_TEXT_STYLE: Readonly<TextStyle> = { font: "sans", weight: 800, italic: false, fill: "#ffffff", size: "m", x: 0.5, y: 0.5, backing: false };
 // A saved title shows for its clip's whole span (`clip`, an index into the saved clips) or for an explicit post-overlap interval.
-export type ProjectText = TextLabel & TextStyle & ({ clip: number; start?: never; duration?: never } | { clip?: never; start: number; duration: number });
+export type ProjectText = TextLabel & TextStyle & ({ clip: number; start?: never; duration?: never } | { clip?: never; start: number; duration: number })
+  & { motion?: LayerMotion; reveal?: TitleReveal; occlusion?: TitleOcclusion; animationOffset?: number };
 // The mix recipe is saved with its style; individual word looks never are.
 export type CaptionSettings = CaptionPlacement & { style: CaptionStyleId; mix?: CaptionMix };
 export type ClipSettings = {
@@ -148,6 +149,99 @@ export const DEFAULT_CLIP_SETTINGS: Readonly<ClipSettings> = {
 };
 export type PhotoSettings = Pick<ClipSettings, "frameMode" | "centerX" | "centerY" | "zoom"> & { slowZoom: boolean };
 export type PunchIn = { start: number; length: number; zoom: 1.1 | 1.25 | 1.4 };
+
+export const MOTION_CHANNELS = ["x", "y", "scale", "rotation", "opacity"] as const;
+export type MotionChannel = typeof MOTION_CHANNELS[number];
+export const MOTION_EASINGS = ["hold", "linear", "ease-in", "ease-out", "ease-in-out"] as const;
+export type MotionEasing = typeof MOTION_EASINGS[number] | [number, number, number, number];
+// `at` is source seconds for footage, local seconds for titles and catalog overlays.
+export type MotionKey = { at: number; value: number; easing: MotionEasing };
+export type LayerMotion = { [channel in MotionChannel]?: MotionKey[] };
+// x/y are fractions of the output width/height, scale a uniform multiplier, rotation unwrapped clockwise degrees.
+export const MOTION_RANGES: Readonly<Record<MotionChannel, { min: number; max: number }>> = {
+  x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, scale: { min: 0.1, max: 5 }, rotation: { min: -3600, max: 3600 }, opacity: { min: 0, max: 1 },
+};
+export const MOTION_IDENTITY: Readonly<Record<MotionChannel, number>> = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+export const MAX_MOTION_CHANNEL_KEYS = 60;
+export const MAX_MOTION_KEYS = 1000;
+// Key times of video clips, titles and catalog overlays; photos keep their signed virtual source clock.
+export const MOTION_TIME = { min: 0, max: MAX_STUDIO_DURATION } as const;
+export const PHOTO_MOTION_TIME = { min: -Number.MAX_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER } as const;
+// The easing of the segment that starts at a key; the four numbers are a CSS-style cubic Bezier (x1, y1, x2, y2), all within 0..1.
+export function isMotionEasing(value: unknown): value is MotionEasing {
+  if (typeof value === "string") return MOTION_EASINGS.some((easing) => easing === value);
+  return Array.isArray(value) && value.length === 4 && value.every((item) => range(item, 0, 1));
+}
+// The reason a motion cannot exist, naming the channel and row, or null.
+export function motionProblem(value: unknown, time: { min: number; max: number }): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "Motion must be an object of channels.";
+  const channels = Object.keys(value);
+  if (channels.length === 0) return "Motion needs at least one channel.";
+  for (const channel of channels) {
+    if (!MOTION_CHANNELS.some((known) => known === channel)) return `Motion has no ${channel} channel. Use ${MOTION_CHANNELS.join(", ")}.`;
+    const keys: unknown = (value as Record<string, unknown>)[channel];
+    if (!Array.isArray(keys) || keys.length === 0) return `Motion ${channel} needs at least one key.`;
+    if (keys.length > MAX_MOTION_CHANNEL_KEYS) return `Motion ${channel} has at most ${MAX_MOTION_CHANNEL_KEYS} keys.`;
+    const { min, max } = MOTION_RANGES[channel as MotionChannel];
+    for (const [index, key] of keys.entries()) {
+      const at = `Motion ${channel}[${index}]`;
+      if (!record(key, ["at", "value", "easing"])) return `${at} needs exactly at, value and easing.`;
+      if (!range(key.at, time.min, time.max)) return `${at}.at must be between ${time.min} and ${time.max} seconds.`;
+      if (!range(key.value, min, max)) return `${at}.value must be between ${min} and ${max}.`;
+      if (!isMotionEasing(key.easing)) return `${at}.easing must be ${MOTION_EASINGS.join(", ")} or four numbers between 0 and 1.`;
+      if (index > 0 && key.at - (keys[index - 1] as MotionKey).at <= STUDIO_TIME_TOLERANCE) return `${at}.at must be later than the previous key.`;
+    }
+  }
+  return null;
+}
+export function isLayerMotion(value: unknown, time: { min: number; max: number }): value is LayerMotion {
+  return motionProblem(value, time) === null;
+}
+export function motionKeyCount(motion: LayerMotion | undefined) {
+  return motion === undefined ? 0 : MOTION_CHANNELS.reduce((sum, channel) => sum + (motion[channel] === undefined ? 0 : motion[channel].length), 0);
+}
+// Absent channels are identity; any stored nonidentity value counts, in or out of the visible span.
+export function motionIsIdentity(motion: LayerMotion | undefined) {
+  return motion === undefined || MOTION_CHANNELS.every((channel) => (motion[channel] ?? []).every((key) => key.value === MOTION_IDENTITY[channel]));
+}
+
+export const REVEAL_DIRECTIONS = ["up", "down", "left", "right"] as const;
+export type RevealRect = { x: number; y: number; width: number; height: number };
+// `rect` is a fraction of the title's padded box; `start` is title-local seconds like title motion keys; the edge named by `direction` travels.
+export type TitleReveal = { rect: RevealRect; direction: typeof REVEAL_DIRECTIONS[number]; start: number; duration: number; easing: MotionEasing };
+export const REVEAL_DURATION = { min: 1 / 30, max: 10 } as const;
+export const REVEAL_MIN_SIDE = 0.01;
+export const DEFAULT_TITLE_REVEAL: Readonly<TitleReveal> = { rect: { x: 0, y: 0, width: 1, height: 1 }, direction: "up", start: 0, duration: 0.4, easing: "ease-out" };
+export const revealIsFull = ({ x, y, width, height }: RevealRect) => x === 0 && y === 0 && width === 1 && height === 1;
+// The first reason a reveal cannot exist, naming its field ("" when it is not a reveal at all), or null.
+export function revealProblem(value: unknown): { field: string; message: string } | null {
+  if (!record(value, ["rect", "direction", "start", "duration", "easing"])) return { field: "", message: "A reveal needs exactly rect, direction, start, duration and easing." };
+  const { rect } = value;
+  if (!record(rect, ["x", "y", "width", "height"]) || !range(rect.x, 0, 1) || !range(rect.y, 0, 1) || !range(rect.width, REVEAL_MIN_SIDE, 1) || !range(rect.height, REVEAL_MIN_SIDE, 1)
+    || rect.x + rect.width > 1 + STUDIO_TIME_TOLERANCE || rect.y + rect.height > 1 + STUDIO_TIME_TOLERANCE) return { field: "rect", message: `The reveal rectangle needs x, y, width and height as fractions of the title box, at least ${REVEAL_MIN_SIDE} wide and tall and inside it.` };
+  if (!REVEAL_DIRECTIONS.some((direction) => direction === value.direction)) return { field: "direction", message: `The reveal direction must be ${REVEAL_DIRECTIONS.join(", ")}.` };
+  if (!range(value.start, 0, MAX_STUDIO_DURATION)) return { field: "start", message: `The reveal start must be between 0 and ${MAX_STUDIO_DURATION} seconds.` };
+  if (!range(value.duration, REVEAL_DURATION.min - STUDIO_TIME_TOLERANCE, REVEAL_DURATION.max)) return { field: "duration", message: `The reveal lasts between ${REVEAL_DURATION.min.toFixed(2)} and ${REVEAL_DURATION.max} seconds.` };
+  if (!isMotionEasing(value.easing)) return { field: "easing", message: `The reveal easing must be ${MOTION_EASINGS.join(", ")} or four numbers between 0 and 1.` };
+  return null;
+}
+export const isTitleReveal = (value: unknown): value is TitleReveal => revealProblem(value) === null;
+
+// The frozen person-mask preset: one exact model, runtime and pre/postprocess revision. A saved id never means a downloadable model.
+export const PEOPLE_MODEL = "people-v1";
+// `clip` is the saved index of the footage whose people stand in front of the title; threshold is a confidence, feather a blur radius in mask pixels of the 256-pixel grid, smoothing the weight of the two preceding source pictures.
+export type TitleOcclusion = { clip: number; model: typeof PEOPLE_MODEL; threshold: number; feather: number; smoothing: number };
+export const OCCLUSION_RANGES = { threshold: { min: 0.1, max: 0.9 }, feather: { min: 0, max: 4 }, smoothing: { min: 0, max: 0.5 } } as const;
+export const DEFAULT_OCCLUSION: Readonly<Omit<TitleOcclusion, "clip">> = { model: PEOPLE_MODEL, threshold: 0.5, feather: 1, smoothing: 0.2 };
+// The first reason these quality fields cannot exist, naming the field, or null.
+export function occlusionProblem(value: Readonly<Record<string, unknown>>): { field: string; message: string } | null {
+  if (value.model !== PEOPLE_MODEL) return { field: "model", message: `The person model must be ${PEOPLE_MODEL}.` };
+  for (const field of ["threshold", "feather", "smoothing"] as const) {
+    const { min, max } = OCCLUSION_RANGES[field];
+    if (!range(value[field], min, max)) return { field, message: `Behind-person ${field} must be between ${min} and ${max}.` };
+  }
+  return null;
+}
 export const MAX_PUNCH_INS = 50;
 export type Crop = { top: number; right: number; bottom: number; left: number };
 export const PLACE_MODES = ["full", "top", "bottom", "left", "right", "pip-top-left", "pip-top-right", "pip-bottom-left", "pip-bottom-right"] as const;
@@ -168,10 +262,11 @@ export function isPlace(value: unknown): value is Place {
   return range(value.x, 0, 1) && range(value.y, 0, 1) && range(value.width, 0.05, 1) && range(value.height, 0.05, 1)
     && value.x + value.width <= 1 + STUDIO_TIME_TOLERANCE && value.y + value.height <= 1 + STUDIO_TIME_TOLERANCE;
 }
+export type ProjectOverlay = { family: string; preset: string; start: number; configuration: string; motion?: LayerMotion };
 export type ProjectClip = (
   | { label: string; kind: "video"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; punchIns?: PunchIn[] }
   | { label: string; kind: "photo"; duration: number; settings: PhotoSettings; sourceStart?: number; punchIns?: PunchIn[] }
-) & { crop?: Crop; place?: Place } & ({ track?: never; start?: never } | { track: "v2"; start: number });
+) & { crop?: Crop; place?: Place; motion?: LayerMotion } & ({ track?: never; start?: never } | { track: "v2"; start: number });
 export function projectClipDuration(clip: ProjectClip) {
   return clip.kind === "photo" ? clip.duration : clip.outPoint - clip.inPoint;
 }
@@ -200,7 +295,8 @@ export type StudioProject = {
   transitions?: (ClipTransition & { cut: number })[];
   captions?: CaptionSettings;
   texts?: ProjectText[];
-  overlays: { family: string; preset: string; start: number; configuration: string }[];
+  overlays: ProjectOverlay[];
+  sfx?: ProjectSfx[];
 };
 
 export type StudioProjectSummary = {
@@ -287,10 +383,101 @@ function isProjectText(value: unknown, clips: ProjectClip[], total: number): val
   const anchored = Object.hasOwn(value, "clip");
   const keys = ["text", ...TEXT_STYLE_KEYS, ...(anchored ? ["clip"] : ["start", "duration"])];
   if (Object.hasOwn(value, "timestamp")) keys.push("timestamp");
+  const moving = Object.hasOwn(value, "motion");
+  if (moving) { if (!isLayerMotion((value as ProjectText).motion, MOTION_TIME)) return false; keys.push("motion"); }
+  const revealing = Object.hasOwn(value, "reveal");
+  if (revealing) { if (!isTitleReveal((value as ProjectText).reveal)) return false; keys.push("reveal"); }
+  if (Object.hasOwn(value, "animationOffset")) {
+    const offset = (value as ProjectText).animationOffset;
+    if (!(moving || revealing) || !range(offset, PHOTO_MOTION_TIME.min, PHOTO_MOTION_TIME.max) || offset === 0) return false;
+    keys.push("animationOffset");
+  }
+  const occluded = Object.hasOwn(value, "occlusion");
+  if (occluded) keys.push("occlusion");
   if (!record(value, keys) || !isTextLabel(value) || !isTextStyle(value)) return false;
+  const person = occluded ? (value as ProjectText).occlusion : undefined;
+  if (occluded && (!record(person, ["clip", "model", "threshold", "feather", "smoothing"]) || occlusionProblem(person) !== null
+    || typeof person.clip !== "number" || !Number.isInteger(person.clip) || clips[person.clip] === undefined || (anchored && person.clip !== value.clip))) return false;
   if (!anchored) return value.timestamp === undefined && number(value.start) && isTextDuration(value.duration) && (total === 0 ? value.start === 0 : value.start < total);
   const owner = typeof value.clip === "number" && Number.isInteger(value.clip) ? clips[value.clip] : undefined;
   return owner !== undefined && (value.timestamp !== "source" || owner.kind === "video");
+}
+
+export const SFX_PACK = "ugc-1";
+export const SFX_RATE = 48_000;
+export const SFX_CATEGORIES = ["click", "typing", "whoosh", "pop", "sparkle"] as const;
+export type SfxCategory = typeof SFX_CATEGORIES[number];
+// The frozen pack. `file` is content-hashed, `frames` counts stereo frames at SFX_RATE, `syncSample` is the frame whose attack meets an event.
+export type SfxAsset = { id: string; name: string; category: SfxCategory; file: string; sha256: string; bytes: number; frames: number; defaultGain: number; syncSample: number };
+export const SFX_ASSETS: readonly SfxAsset[] = [
+  { id: "ugc-click-01", name: "Interface click", category: "click", file: "ugc-click-01.992934be.wav", sha256: "992934bed738c3e8c4f0f96de38fd20012204f22a05715e317a81ebe586d0117", bytes: 18692, frames: 4662, defaultGain: 0.35, syncSample: 0 },
+  { id: "ugc-click-02", name: "Mouse click", category: "click", file: "ugc-click-02.1bfe47db.wav", sha256: "1bfe47dbb026d662c3b38dd15d9e98b42c8d85a2166a6002a4be3fc1ab691379", bytes: 10888, frames: 2711, defaultGain: 0.35, syncSample: 502 },
+  { id: "ugc-typing-01", name: "Keyboard burst", category: "typing", file: "ugc-typing-01.2586a3c2.wav", sha256: "2586a3c20e75c054f78b0bc2fbc03fb6e0e824828fb80afd82494fafebb6052a", bytes: 730232, frames: 182547, defaultGain: 0.25, syncSample: 3582 },
+  { id: "ugc-typing-02", name: "Single mechanical key", category: "typing", file: "ugc-typing-02.da13d327.wav", sha256: "da13d32739cab89cc1979da06a2fd67033b3fbf1c88433b7b6bd3292d4d21b9b", bytes: 60232, frames: 15047, defaultGain: 0.25, syncSample: 3916 },
+  { id: "ugc-whoosh-01", name: "Bamboo swish", category: "whoosh", file: "ugc-whoosh-01.9a0cf026.wav", sha256: "9a0cf0267f1edddeb8979efd4b04d943fb08051866bd71d5f83fcf0c1428e4b7", bytes: 81872, frames: 20457, defaultGain: 0.3, syncSample: 4104 },
+  { id: "ugc-whoosh-02", name: "Air sweep", category: "whoosh", file: "ugc-whoosh-02.bb9b11a2.wav", sha256: "bb9b11a21e1486f13dbd3dc973bff328843b40c8bcfc55a845e1862f59b44a2e", bytes: 323204, frames: 80790, defaultGain: 0.3, syncSample: 44328 },
+  { id: "ugc-pop-01", name: "Bubble pop", category: "pop", file: "ugc-pop-01.11dc33b7.wav", sha256: "11dc33b7aa35a8534e9230a59e9f950cd36d6b7db94f37e8ada7864331d71bf1", bytes: 28744, frames: 7175, defaultGain: 0.35, syncSample: 262 },
+  { id: "ugc-pop-02", name: "Mouth pop", category: "pop", file: "ugc-pop-02.7ecf8370.wav", sha256: "7ecf837064d232374a72e68702885301ffb7e3e2b39b58e126c4175a9cc843d7", bytes: 112888, frames: 28211, defaultGain: 0.35, syncSample: 6993 },
+  { id: "ugc-sparkle-01", name: "Cartoon sparkle", category: "sparkle", file: "ugc-sparkle-01.423655b4.wav", sha256: "423655b4f6080bea2fb772f1f94a7f812867173e6f16bcb5b7d8192c38a5bc0b", bytes: 122524, frames: 30620, defaultGain: 1.5, syncSample: 72 },
+  { id: "ugc-sparkle-02", name: "Magic chime", category: "sparkle", file: "ugc-sparkle-02.a75b4305.wav", sha256: "a75b4305f4c168a73897c369393d980d011f19d05bd14beb7bf23c543f064aa8", bytes: 374824, frames: 93695, defaultGain: 0.25, syncSample: 167 },
+];
+export const MAX_STUDIO_SFX = 100;
+export const SFX_OFFSET = { min: -2, max: 2 } as const;
+export const SFX_GAIN = { min: 0, max: 2 } as const;
+export const SFX_FADE_MAX = 2;
+export const SFX_CUE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export type SfxSettings = { asset: string; inPoint: number; outPoint: number; gain: number; muted: boolean; fadeIn: number; fadeOut: number };
+const SFX_SETTING_KEYS = ["asset", "inPoint", "outPoint", "gain", "muted", "fadeIn", "fadeOut"];
+export type ProjectSfxAnchor = { kind: "title-enter"; text: number } | { kind: "transition"; from: number; to: number } | { kind: "overlay-cue"; overlay: number; cue: string };
+// A saved sound starts at an absolute post-overlap time or follows an event of a saved title, V1 transition or overlay cue, `offset` seconds away.
+export type ProjectSfx = SfxSettings & ({ start: number; anchor?: never; offset?: never } | { anchor: ProjectSfxAnchor; offset: number; start?: never }) & { auto?: typeof SFX_PACK };
+
+export function sfxAsset(id: unknown) {
+  return SFX_ASSETS.find((asset) => asset.id === id);
+}
+export function sfxDuration(asset: SfxAsset) {
+  return asset.frames / SFX_RATE;
+}
+export function isSfxOffset(value: unknown): value is number {
+  return range(value, SFX_OFFSET.min, SFX_OFFSET.max);
+}
+// The reason the settings of a sound cannot exist, or null. At least one sample stays inside the asset; fades fit the retained length.
+export function sfxSettingsProblem(value: Readonly<Record<string, unknown>>) {
+  const asset = sfxAsset(value.asset);
+  if (asset === undefined) return "Unknown sound.";
+  const { inPoint, outPoint, gain, muted, fadeIn, fadeOut } = value;
+  if (!range(inPoint, 0, sfxDuration(asset)) || !range(outPoint, 0, sfxDuration(asset) + STUDIO_TIME_TOLERANCE)
+    || outPoint - inPoint < 1 / SFX_RATE - STUDIO_TIME_TOLERANCE) return "Keep at least one sample of the sound between its start and end.";
+  if (!range(gain, SFX_GAIN.min, SFX_GAIN.max) || typeof muted !== "boolean") return "A sound's volume is between 0 and 2.";
+  if (!range(fadeIn, 0, SFX_FADE_MAX) || !range(fadeOut, 0, SFX_FADE_MAX) || fadeIn + fadeOut > outPoint - inPoint + STUDIO_TIME_TOLERANCE) return "Fades are at most 2 seconds and must fit inside the trimmed sound.";
+  return null;
+}
+// The reason a saved sound cannot exist in this project, or null. Cue availability needs composition metadata and is checked where that is loaded.
+function projectSfxProblem(value: unknown, project: Pick<StudioProject, "clips" | "transitions" | "texts" | "overlays">, total: number) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "A saved sound is not an object.";
+  const anchored = Object.hasOwn(value, "anchor");
+  const keys = [...SFX_SETTING_KEYS, ...(anchored ? ["anchor", "offset"] : ["start"]), ...(Object.hasOwn(value, "auto") ? ["auto"] : [])];
+  if (!record(value, keys)) return "A saved sound has unknown or missing fields.";
+  if (value.auto !== undefined && value.auto !== SFX_PACK) return "Unknown sound origin.";
+  const problem = sfxSettingsProblem(value);
+  if (problem !== null) return problem;
+  if (!anchored) return number(value.start) && value.start < total ? null : "A sound must start inside the timeline.";
+  if (!isSfxOffset(value.offset)) return "A linked sound is at most 2 seconds from its event.";
+  const { anchor } = value;
+  const index = (item: unknown, length: number): item is number => typeof item === "number" && Number.isInteger(item) && item >= 0 && item < length;
+  if (record(anchor, ["kind", "text"]) && anchor.kind === "title-enter") {
+    return index(anchor.text, (project.texts === undefined ? [] : project.texts).length) ? null : "A sound's title is missing.";
+  }
+  if (record(anchor, ["kind", "overlay", "cue"]) && anchor.kind === "overlay-cue") {
+    return index(anchor.overlay, project.overlays.length) && typeof anchor.cue === "string" && anchor.cue.length <= 64 && SFX_CUE_ID.test(anchor.cue) ? null : "A sound's overlay cue is malformed.";
+  }
+  if (record(anchor, ["kind", "from", "to"]) && anchor.kind === "transition") {
+    const v1 = project.clips.filter((clip) => clip.track === undefined).length;
+    const valid = index(anchor.from, v1) && anchor.to === anchor.from + 1 && anchor.to < v1
+      && project.transitions !== undefined && project.transitions.some((transition) => transition.cut === anchor.from);
+    return valid ? null : "A sound's transition does not exist.";
+  }
+  return "A sound's event is unknown or malformed.";
 }
 
 // The API supplies its startup catalog; the browser supplies the catalog loaded for Studio.
@@ -300,6 +487,7 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
   if (Object.hasOwn(value, "transitions")) keys.push("transitions");
   if (Object.hasOwn(value, "captions")) keys.push("captions");
   if (Object.hasOwn(value, "texts")) keys.push("texts");
+  if (Object.hasOwn(value, "sfx")) keys.push("sfx");
   if (!record(value, keys) || !text(value.name, 80)
     || !STUDIO_ASPECTS.some((aspect) => aspect === value.aspect)
     || !Array.isArray(value.clips) || value.clips.length > MAX_STUDIO_CLIPS
@@ -311,6 +499,7 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     const spatialKeys: string[] = [];
     if (Object.hasOwn(clip, "crop")) { if (!isCrop(clip.crop)) return false; spatialKeys.push("crop"); }
     if (Object.hasOwn(clip, "place")) { if (!isPlace(clip.place)) return false; spatialKeys.push("place"); }
+    if (Object.hasOwn(clip, "motion")) { if (!isLayerMotion(clip.motion, clip.kind === "photo" ? PHOTO_MOTION_TIME : MOTION_TIME)) return false; spatialKeys.push("motion"); }
     if (Object.hasOwn(clip, "track")) {
       if (clip.track !== "v2" || !number(clip.start)) return false;
       spatialKeys.push("track", "start");
@@ -351,7 +540,12 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
   const total = projectDuration(project);
   if (total > MAX_STUDIO_DURATION + STUDIO_TIME_TOLERANCE) return false;
   for (const overlay of value.overlays) {
-    if (!record(overlay, ["family", "preset", "start", "configuration"])
+    const keys = ["family", "preset", "start", "configuration"];
+    if (typeof overlay === "object" && overlay !== null && Object.hasOwn(overlay, "motion")) {
+      if (!isLayerMotion((overlay as ProjectOverlay).motion, MOTION_TIME)) return false;
+      keys.push("motion");
+    }
+    if (!record(overlay, keys)
       || !text(overlay.family, 100) || !text(overlay.preset, 100)
       || !presets.has(`${overlay.family}/${overlay.preset}`) || !number(overlay.start)
       || (total === 0 ? overlay.start !== 0 : overlay.start >= total)) return false;
@@ -362,6 +556,11 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     if (!Array.isArray(value.texts) || value.texts.length === 0 || value.texts.length > MAX_STUDIO_TEXTS) return false;
     for (const title of value.texts) if (!isProjectText(title, project.clips, total)) return false;
   }
-  return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_STUDIO_PROJECT_BYTES;
+  if (Object.hasOwn(value, "sfx")) {
+    if (!Array.isArray(value.sfx) || value.sfx.length === 0 || value.sfx.length > MAX_STUDIO_SFX || total <= 0) return false;
+    for (const sound of value.sfx) if (projectSfxProblem(sound, project, total) !== null) return false;
+  }
+  const motionKeys = [...project.clips, ...project.overlays, ...(project.texts === undefined ? [] : project.texts)].reduce((sum, layer) => sum + motionKeyCount(layer.motion), 0);
+  return motionKeys <= MAX_MOTION_KEYS && new TextEncoder().encode(JSON.stringify(value)).length <= MAX_STUDIO_PROJECT_BYTES;
 }
 

@@ -1,0 +1,389 @@
+{
+  "pack": "ugc-1",
+  "format": {
+    "container": "WAV",
+    "encoding": "PCM16LE",
+    "channels": 2,
+    "sampleRate": 48000
+  },
+  "sounds": [
+    {
+      "id": "ugc-click-01",
+      "name": "Interface click",
+      "category": "click",
+      "file": "ugc-click-01.992934be.wav",
+      "sha256": "992934bed738c3e8c4f0f96de38fd20012204f22a05715e317a81ebe586d0117",
+      "bytes": 18692,
+      "frames": 4662,
+      "defaultGain": 0.35,
+      "syncSample": 0,
+      "onsetSample": 0,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://kenney.nl/assets/interface-sounds",
+        "author": "Kenney (Kenney Vleugels)",
+        "archiveUrl": "https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip",
+        "archiveMember": "Audio/click_001.ogg",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Archive License.txt (licenses/kenney-interface-sounds-License.txt): \"License: (Creative Commons Zero, CC0)\"; retrieved 2026-10-21",
+        "form": "original",
+        "sourceSha256": "ccfb7fa0cccdd9faec0eb16033c732b1e308d139d80f799161495d58f7adcdb9",
+        "sourceBytes": 4876,
+        "sourceFormat": "Ogg Vorbis, 44.1 kHz mono"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,pan=stereo|c0=c0|c1=c0,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 4662,
+          "framesBeforeTrim": 4662,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 0; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-click-02",
+      "name": "Mouse click",
+      "category": "click",
+      "file": "ugc-click-02.1bfe47db.wav",
+      "sha256": "1bfe47dbb026d662c3b38dd15d9e98b42c8d85a2166a6002a4be3fc1ab691379",
+      "bytes": 10888,
+      "frames": 2711,
+      "defaultGain": 0.35,
+      "syncSample": 502,
+      "onsetSample": 502,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://kenney.nl/assets/ui-audio",
+        "author": "Kenney (Kenney Vleugels)",
+        "archiveUrl": "https://kenney.nl/media/pages/assets/ui-audio/490d233f68-1677590494/kenney_ui-audio.zip",
+        "archiveMember": "Audio/mouseclick1.ogg",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Archive License.txt (licenses/kenney-ui-audio-License.txt): \"License: (Creative Commons Zero, CC0)\"; retrieved 2026-10-21",
+        "form": "original",
+        "sourceSha256": "ece1210c62ccae6c9ea4f4c59466d9d453d6b357c7d4b1a6c31196e5e6fea1bf",
+        "sourceBytes": 4686,
+        "sourceFormat": "Ogg Vorbis, 44.1 kHz stereo"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 2711,
+          "framesBeforeTrim": 2711,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 0; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-typing-01",
+      "name": "Keyboard burst",
+      "category": "typing",
+      "file": "ugc-typing-01.2586a3c2.wav",
+      "sha256": "2586a3c20e75c054f78b0bc2fbc03fb6e0e824828fb80afd82494fafebb6052a",
+      "bytes": 730232,
+      "frames": 182547,
+      "defaultGain": 0.25,
+      "syncSample": 3582,
+      "onsetSample": 3582,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/Breviceps/sounds/447909/",
+        "author": "Breviceps",
+        "filename": "447909__breviceps__keyboard-typing.wav",
+        "previewUrl": "https://cdn.freesound.org/previews/447/447909_9159316-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz stereo, about 202 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as WAV PCM16, 44.1 kHz stereo, 3.803 s.",
+        "sourceSha256": "9777520f7b6a68f2b33104ee908437a78c434fb643a3038fab3fbdf235a848c5",
+        "sourceBytes": 97129,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz stereo, about 202 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 182547,
+          "framesBeforeTrim": 182547,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 40; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-typing-02",
+      "name": "Single mechanical key",
+      "category": "typing",
+      "file": "ugc-typing-02.da13d327.wav",
+      "sha256": "da13d32739cab89cc1979da06a2fd67033b3fbf1c88433b7b6bd3292d4d21b9b",
+      "bytes": 60232,
+      "frames": 15047,
+      "defaultGain": 0.25,
+      "syncSample": 3916,
+      "onsetSample": 3916,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/Professor-Syntax/sounds/523768/",
+        "author": "Professor-Syntax",
+        "filename": "523768__professor-syntax__single-mechanical-keyboard-tap.wav",
+        "previewUrl": "https://cdn.freesound.org/previews/523/523768_11581194-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz mono, about 243 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as WAV PCM16, 44.1 kHz mono, 0.313 s.",
+        "sourceSha256": "5e09531316ccb4b979707e32d9e77f2e9c7b5ce68b75019872265e23bfd93fdb",
+        "sourceBytes": 10334,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz mono, about 243 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,pan=stereo|c0=c0|c1=c0,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 15047,
+          "framesBeforeTrim": 15047,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 0; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-whoosh-01",
+      "name": "Bamboo swish",
+      "category": "whoosh",
+      "file": "ugc-whoosh-01.9a0cf026.wav",
+      "sha256": "9a0cf0267f1edddeb8979efd4b04d943fb08051866bd71d5f83fcf0c1428e4b7",
+      "bytes": 81872,
+      "frames": 20457,
+      "defaultGain": 0.3,
+      "syncSample": 4104,
+      "onsetSample": 635,
+      "syncRule": "5 ms RMS envelope (240-frame window, 48-frame hop, both channels), centre sample of the loudest window",
+      "source": {
+        "url": "https://freesound.org/people/qubodup/sounds/60013/",
+        "author": "qubodup",
+        "filename": "60013__qubodup__whoosh.flac",
+        "previewUrl": "https://cdn.freesound.org/previews/60/60013_71257-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz stereo, about 202 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as FLAC PCM24, 44.1 kHz stereo, 0.426 s.",
+        "sourceSha256": "ebdb219e7f36f7e1aecdb045d6d8bdad059119af319863777c7302a69fa41a92",
+        "sourceBytes": 11897,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz stereo, about 202 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 20457,
+          "framesBeforeTrim": 20457,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 0; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-whoosh-02",
+      "name": "Air sweep",
+      "category": "whoosh",
+      "file": "ugc-whoosh-02.bb9b11a2.wav",
+      "sha256": "bb9b11a21e1486f13dbd3dc973bff328843b40c8bcfc55a845e1862f59b44a2e",
+      "bytes": 323204,
+      "frames": 80790,
+      "defaultGain": 0.3,
+      "syncSample": 44328,
+      "onsetSample": 6386,
+      "syncRule": "5 ms RMS envelope (240-frame window, 48-frame hop, both channels), centre sample of the loudest window",
+      "source": {
+        "url": "https://freesound.org/people/florianreichelt/sounds/683096/",
+        "author": "florianreichelt",
+        "filename": "683096__florianreichelt__woosh.mp3",
+        "previewUrl": "https://cdn.freesound.org/previews/683/683096_6253486-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 48000 Hz stereo, about 187 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as MP3, 48 kHz stereo, 1.716 s. The original upload is itself lossy MP3, so this WAV is a second lossy generation.",
+        "sourceSha256": "3c641d4d6ea0c6b65423d8fe1a7d72bf7bfb08a91c1640f9e9a0ab9d5d23b265",
+        "sourceBytes": 40872,
+        "sourceFormat": "MP3 HQ preview, 48000 Hz stereo, about 187 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=1625,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 1625,
+          "endFrameExclusive": 82415,
+          "framesBeforeTrim": 82415,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 1721; start = max(0, that - 96 frames (2 ms)) = 1625. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-pop-01",
+      "name": "Bubble pop",
+      "category": "pop",
+      "file": "ugc-pop-01.11dc33b7.wav",
+      "sha256": "11dc33b7aa35a8534e9230a59e9f950cd36d6b7db94f37e8ada7864331d71bf1",
+      "bytes": 28744,
+      "frames": 7175,
+      "defaultGain": 0.35,
+      "syncSample": 262,
+      "onsetSample": 262,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/arttim/sounds/733264/",
+        "author": "arttim",
+        "filename": "733264__arttim__bubble_pop.mp3",
+        "previewUrl": "https://cdn.freesound.org/previews/733/733264_15926992-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz stereo, about 260 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as MP3, 44.1 kHz stereo, 0.149 s. The original upload is itself lossy MP3, so this WAV is a second lossy generation.",
+        "sourceSha256": "ee3e39538e1535540841097039ff2b88a2bd9c369ae86ea8f59cd595de02d19e",
+        "sourceBytes": 5950,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz stereo, about 260 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 7175,
+          "framesBeforeTrim": 7175,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 0; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-pop-02",
+      "name": "Mouth pop",
+      "category": "pop",
+      "file": "ugc-pop-02.7ecf8370.wav",
+      "sha256": "7ecf837064d232374a72e68702885301ffb7e3e2b39b58e126c4175a9cc843d7",
+      "bytes": 112888,
+      "frames": 28211,
+      "defaultGain": 0.35,
+      "syncSample": 6993,
+      "onsetSample": 6993,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/magicjoshua/sounds/704170/",
+        "author": "magicjoshua",
+        "filename": "704170__magicjoshua__popping-sound-made-with-mouth.wav",
+        "previewUrl": "https://cdn.freesound.org/previews/704/704170_6893335-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 48000 Hz stereo, about 162 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as WAV PCM32, 96 kHz stereo, 0.587 s.",
+        "sourceSha256": "887485c71d2b4e2e800809b2cfb8f01e99529f073bb6ef6b55a681cfa7d7ebc6",
+        "sourceBytes": 12672,
+        "sourceFormat": "MP3 HQ preview, 48000 Hz stereo, about 162 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 28211,
+          "framesBeforeTrim": 28211,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 28; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-sparkle-01",
+      "name": "Cartoon sparkle",
+      "category": "sparkle",
+      "file": "ugc-sparkle-01.423655b4.wav",
+      "sha256": "423655b4f6080bea2fb772f1f94a7f812867173e6f16bcb5b7d8192c38a5bc0b",
+      "bytes": 122524,
+      "frames": 30620,
+      "defaultGain": 1.5,
+      "syncSample": 72,
+      "onsetSample": 72,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/MLaudio/sounds/511485/",
+        "author": "MLaudio",
+        "filename": "511485__mlaudio__cartoon_wink_magic_sparkle.wav",
+        "previewUrl": "https://cdn.freesound.org/previews/511/511485_6890478-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz stereo, about 197 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as WAV PCM16, 44.1 kHz stereo, 1.271 s.",
+        "sourceSha256": "391d56061a84d6cca6be41c8a3bd5cc5780540fa6302016778d5873979411ad6",
+        "sourceBytes": 32094,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz stereo, about 197 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=0:end_sample=30620,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 0,
+          "endFrameExclusive": 30620,
+          "framesBeforeTrim": 61023,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 71; start = max(0, that - 96 frames (2 ms)) = 0. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    },
+    {
+      "id": "ugc-sparkle-02",
+      "name": "Magic chime",
+      "category": "sparkle",
+      "file": "ugc-sparkle-02.a75b4305.wav",
+      "sha256": "a75b4305f4c168a73897c369393d980d011f19d05bd14beb7bf23c543f064aa8",
+      "bytes": 374824,
+      "frames": 93695,
+      "defaultGain": 0.25,
+      "syncSample": 167,
+      "onsetSample": 167,
+      "syncRule": "onset",
+      "source": {
+        "url": "https://freesound.org/people/renatalmar/sounds/264981/",
+        "author": "renatalmar",
+        "filename": "264981__renatalmar__sfx-magic.wav",
+        "previewUrl": "https://cdn.freesound.org/previews/264/264981_3370213-hq.mp3",
+        "licence": "CC0 1.0",
+        "licenceUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "licenceEvidence": "Sound page licence panel reads \"Creative Commons 0 - You can copy, modify, distribute and perform the sound, even for commercial purposes, all without the need of asking permission to the author.\" and links http://creativecommons.org/publicdomain/zero/1.0/; retrieved 2026-10-21",
+        "form": "hq-preview",
+        "formNote": "Derived from the lossy HQ preview MP3 (Freesound public preview, MP3, 44100 Hz stereo, about 198 kbps as probed), not from the original upload, which needs a Freesound login to download. The page lists the original as WAV PCM16, 44.1 kHz stereo, 1.953 s.",
+        "sourceSha256": "fe290acb41783c3b9591d5c5b738b06f75da348f97548f9945269959106ee961",
+        "sourceBytes": 49049,
+        "sourceFormat": "MP3 HQ preview, 44100 Hz stereo, about 198 kbps"
+      },
+      "conversion": {
+        "tool": "ffmpeg 7.1.1",
+        "command": "ffmpeg -v error -i <source> -map_metadata -1 -af \"aresample=48000,atrim=start_sample=79,asetpts=N/SR/TB\" -c:a pcm_s16le -bitexact -fflags +bitexact <out>.wav",
+        "trim": {
+          "startFrameRemoved": 79,
+          "endFrameExclusive": 93774,
+          "framesBeforeTrim": 93774,
+          "rule": "Leading: first frame where either channel exceeds -60 dBFS (|sample| > 32.768 of 32768) was at 175; start = max(0, that - 96 frames (2 ms)) = 79. Trailing: kept whole unless the run below -60 dBFS after the last such frame exceeds 0.5 s, then cut 4800 frames (0.1 s) after it."
+        },
+        "gain": "none"
+      }
+    }
+  ]
+}

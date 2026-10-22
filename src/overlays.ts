@@ -6,13 +6,14 @@ import { ToolError } from "./errors.js";
 import type { StudioOverlay } from "../vendor/web/src/lib/studio-state.js";
 
 export type Relevance = { relevant: string[]; irrelevant: string[] };
-export type Configured = { configuration: string; tier: "free" | "pro"; editorUrl: string; relevance: Relevance; studio: Pick<StudioOverlay, "family" | "preset" | "config">; render: {
+export type ActiveCue = { id: string; kind: string; at: number };
+export type Configured = { configuration: string; tier: "free" | "pro"; editorUrl: string; relevance: Relevance; activeCues: ActiveCue[]; studio: Pick<StudioOverlay, "family" | "preset" | "config">; render: {
   compositionUrl: string; variables: Record<string, string | number | boolean>; duration: number; width: number; height: number; background: string;
 } };
 export type CatalogItem = { family: string; preset: string; name: string; niche: string; free: boolean; poster: string; editorUrl: string };
 type Catalog = { items: CatalogItem[]; nextCursor: string | null };
 export type Field = { id: string; label: string; type: string; value: unknown; relevant: boolean; [key: string]: unknown };
-export type Preset = { properties: Record<string, Field[]>; looks: { id: string; name: string }[]; aspects: string[]; look: string; duration: number; free: boolean };
+export type Preset = { cues: unknown[]; properties: Record<string, Field[]>; looks: { id: string; name: string }[]; aspects: string[]; look: string; duration: number; free: boolean };
 export async function catalog(filters: Record<string, unknown>, signal?: AbortSignal): Promise<Catalog> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) if (value !== undefined) params.set(key === "free_only" ? "free" : key, String(value));
@@ -43,13 +44,13 @@ export async function authorize(configuration: string, signal?: AbortSignal) {
 function validConfigured(value: unknown): value is Configured {
   const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
   if (!record(value) || !isTemplateHref(value.configuration) || (value.tier !== "free" && value.tier !== "pro") || typeof value.editorUrl !== "string"
-    || !record(value.relevance) || !Array.isArray(value.relevance.relevant) || !Array.isArray(value.relevance.irrelevant) || !record(value.render) || !record(value.studio)) return false;
+    || !record(value.relevance) || !Array.isArray(value.relevance.relevant) || !Array.isArray(value.relevance.irrelevant) || !Array.isArray(value.activeCues) || !record(value.render) || !record(value.studio)) return false;
   const { render, studio } = value;
   if (typeof render.compositionUrl !== "string" || !record(render.variables) || typeof render.background !== "string"
     || ![render.duration, render.width, render.height].every((number) => typeof number === "number" && Number.isFinite(number) && number > 0)) return false;
   if (!record(studio.family) || !record(studio.preset) || !record(studio.config)) return false;
   const { family, preset, config } = studio;
-  return typeof family.id === "string" && typeof family.name === "string" && Array.isArray(family.variables)
+  return typeof family.id === "string" && typeof family.name === "string" && Array.isArray(family.variables) && Array.isArray(family.cues)
     && Array.isArray(family.supported_aspects) && typeof family.default_duration === "number" && Array.isArray(family.looks) && Array.isArray(family.freeConfigs)
     && typeof preset.id === "string" && typeof preset.family === "string" && typeof preset.href === "string"
     && typeof config.aspect === "string" && typeof config.look === "string" && typeof config.duration === "number" && record(config.values);

@@ -29,7 +29,7 @@ if [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" != "$repo_root" ]]; the
   echo "Push requires the source repository." >&2
   exit 1
 fi
-if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- mcp web/src/lib server/src/studio-project.ts)" ]]; then
+if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- mcp web/src/lib web/scripts/person-runtime.mjs web/public/person-models server/src/studio-project.ts)" ]]; then
   echo "Refusing to push uncommitted MCP or shared-source changes." >&2
   exit 1
 fi

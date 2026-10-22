@@ -2,6 +2,7 @@
 import { DEFAULT_TEXT_STYLE, MAX_STUDIO_TEXTS, MAX_TEXT_LENGTH } from "@/lib/studio-project";
 import { clipSourceStart } from "@/lib/clip-settings";
 import { TEXT_ERROR, textProblem, type StudioText } from "@/lib/studio-text";
+import { movedSfx, type StudioSfx } from "@/lib/studio-sfx";
 import type { StudioClip, StudioOverlay } from "@/lib/studio-state";
 
 export const RAPID_FRAMES = [3, 4, 5, 6] as const;
@@ -18,7 +19,7 @@ const LABEL_STYLE = { ...DEFAULT_TEXT_STYLE, y: 0.82, backing: true };
 export const PHOTO_STAMP_MESSAGE = "A photo has no source timestamp. Use the timeline time or none.";
 
 // Teasers go first on V1; everything already placed on an absolute time (V2, overlays, titles) moves later by the same amount.
-export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[] }, input: RapidIntroInput) {
+export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[]; sfx: StudioSfx[] }, input: RapidIntroInput) {
   const { entries, frames, timestamp, muteTeasers, labelIds } = input;
   if (entries.length < RAPID_CLIPS.min || entries.length > RAPID_CLIPS.max) return `Choose ${RAPID_CLIPS.min} to ${RAPID_CLIPS.max} clips.`;
   if (!RAPID_FRAMES.includes(frames)) return "A teaser cut is 3, 4, 5 or 6 frames.";
@@ -33,7 +34,7 @@ export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay
     if (body.outPoint - body.inPoint < length - 1e-6) return `“${body.label}” is shorter than ${frames} frames. Choose a shorter teaser.`;
     if (timestamp === "source" && body.kind === "photo") return PHOTO_STAMP_MESSAGE;
     if (entry.text.length > MAX_TEXT_LENGTH) return TEXT_ERROR;
-    teasers.push({ ...body, id: entry.teaserId, transition: undefined, punchIns: undefined,
+    teasers.push({ ...body, id: entry.teaserId, transition: undefined, punchIns: undefined, motion: undefined,
       ...(body.kind === "photo" ? { duration: length, inPoint: 0, outPoint: length, sourceStart: clipSourceStart(body) } : { outPoint: body.inPoint + length }),
       settings: { ...body.settings, fadeIn: 0, fadeOut: 0, muted: muteTeasers ? true : body.settings.muted } });
     const label: StudioText = { ...LABEL_STYLE, id: labelIds[position], text: entry.text, ...(timestamp === "none" ? {} : { timestamp }), timing: { clipId: body.id } };
@@ -44,5 +45,5 @@ export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay
   const clips = [...teasers, ...state.clips.filter((clip) => clip.track === "v1"), ...state.clips.filter((clip) => clip.track === "v2").map((clip) => clip.track === "v2" ? { ...clip, start: clip.start + shift } : clip)];
   const texts = [...state.texts.map((title) => "clipId" in title.timing ? title : { ...title, timing: { ...title.timing, start: title.timing.start + shift } }), ...labels];
   const problem = texts.map((title) => textProblem(title, clips, Number.MAX_VALUE)).find((message) => message !== null);
-  return problem === undefined ? { clips, texts, overlays: state.overlays.map((overlay) => ({ ...overlay, start: overlay.start + shift })) } : problem;
+  return problem === undefined ? { clips, texts, overlays: state.overlays.map((overlay) => ({ ...overlay, start: overlay.start + shift })), sfx: movedSfx(state.sfx, (time) => time + shift) } : problem;
 }

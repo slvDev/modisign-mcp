@@ -3,12 +3,18 @@ import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncode
 import { drawCaptions, loadCaptionFonts } from "@/lib/caption-render";
 import { drawTexts, loadTextFonts } from "@/lib/text-render";
 import { compositionCapture } from "@/lib/composition-capture";
+import { personTitlesOf } from "@/lib/person-layer";
+import type { PersonExportMasks } from "@/lib/person-masks";
+import { layerPose } from "@/lib/studio-motion";
+import { silencePreview } from "@/lib/preview-activation";
+import { loadSfxAssets } from "@/lib/sfx-assets";
 import { createTimelineAudio, mixTimelineAudio, requireNormalizedAudioEncoding, type TimelineAudioPolicy } from "@/lib/timeline-audio";
 import { timelineSources, renderTimelineSequence, renderNativeClip } from "@/lib/timeline-sequence";
 import { clipDuration, timelineDuration, TIMELINE_BOUNDARY_TOLERANCE, type VideoTimeline } from "@/lib/video-timeline";
 
+// `masks` is required when a title has a person effect: a missing one is a setup failure, never an unmasked file.
 export async function exportVideoTimeline(frames: HTMLIFrameElement[], timeline: VideoTimeline, options: {
-  signal: AbortSignal; onProgress: (fraction: number) => void; audioPolicy: TimelineAudioPolicy; bitrate?: number;
+  signal: AbortSignal; onProgress: (fraction: number) => void; audioPolicy: TimelineAudioPolicy; bitrate?: number; masks?: PersonExportMasks;
 }) {
   const failure = new AbortController();
   const signal = AbortSignal.any([options.signal, failure.signal]);
@@ -18,6 +24,13 @@ export async function exportVideoTimeline(frames: HTMLIFrameElement[], timeline:
   const duration = timelineDuration(clips);
   if (duration <= 0 || frames.length !== overlays.length) throw new Error("The video timeline is incomplete");
   if (options.audioPolicy === "preserve" && clips.length !== 1) throw new Error("Preserved audio requires a single clip");
+  if (personTitlesOf(timeline.texts).length > 0) {
+    if (options.masks === undefined) throw new Error("Titles behind a person need their masks to export");
+    if (frameRate === undefined) throw new Error("Titles behind a person need the Studio frame timing");
+  }
+  const placed = timeline.sfx === undefined ? [] : timeline.sfx;
+  if (options.audioPolicy === "preserve" && placed.length > 0) throw new Error("Sounds cannot be added while preserving a clip's own audio");
+  silencePreview();
   if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
     throw new Error("This browser cannot export H.264 MP4 here. Update your browser or try a recent Chrome, Edge or Safari on a computer. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.");
   }
@@ -44,7 +57,13 @@ export async function exportVideoTimeline(frames: HTMLIFrameElement[], timeline:
       const local = time - overlay.startsAt;
       const image = await captures[index](local);
       const overlayHeight = overlay.height * width / overlay.width;
+      const pose = layerPose(overlay.motion, local, { width, height }, { x: width / 2, y: height / 2 });
+      // The motion matrix applies in output space around the capture's base placement, so it wraps the destination rect instead of replacing it.
+      context.save();
+      context.globalAlpha = pose.opacity;
+      if (pose.matrix !== null) context.transform(...pose.matrix);
       context.drawImage(image, 0, (height - overlayHeight) / 2, width, overlayHeight);
+      context.restore();
     }
     if (timeline.texts !== undefined) drawTexts(context, timeline.texts, time, width, height);
     if (timeline.captions !== undefined) drawCaptions(context, timeline.captions.lines, timeline.captions.style, time, width, height, timeline.captions);
@@ -55,15 +74,16 @@ export async function exportVideoTimeline(frames: HTMLIFrameElement[], timeline:
   try {
     const media = await Promise.all(sources.sources);
     signal.throwIfAborted();
+    const sounds = await loadSfxAssets(placed.map((sound) => sound.asset), signal);
     audio = await createTimelineAudio(media[0].input, options.audioPolicy, duration);
     if (audio.source !== null) output.addAudioTrack(audio.source);
     await output.start();
     const render = frameRate === undefined ? renderNativeClip(timeline, sources, context, signal, finishFrame)
-      : renderTimelineSequence(timeline, sources, context, signal, finishFrame);
+      : renderTimelineSequence(timeline, sources, context, signal, finishFrame, options.masks);
     const tasks = [render, options.audioPolicy === "normalize"
       ? (() => {
         if (audio === null || audio.samples === undefined) throw new Error("Normalized audio is unavailable");
-        return mixTimelineAudio(timeline, sources, audio.samples, signal);
+        return mixTimelineAudio(timeline, sources, audio.samples, signal, sounds);
       })()
       : (() => {
         if (audio.append === undefined) throw new Error("Preserved audio is unavailable");

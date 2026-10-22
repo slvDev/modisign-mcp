@@ -1,6 +1,8 @@
 // generated from the Modisign monorepo, do not edit
 import { aacPriming, STUDIO_AAC_CONFIG } from "@/lib/aac-timing";
-import { clipStarts, clipDuration, timelineDuration, timelineSampler, type VideoTimeline } from "@/lib/video-timeline";
+import type { SfxPcm } from "@/lib/sfx-assets";
+import { sfxEnvelope } from "@/lib/studio-sfx";
+import { clipStarts, clipDuration, timelineDuration, timelineSampler, type TimelineSfx, type VideoTimeline } from "@/lib/video-timeline";
 import type { TimelineSources } from "@/lib/timeline-sequence";
 import { AudioBufferSink, AudioSample, AudioSampleSink, AudioSampleSource, EncodedAudioPacketSource,
   EncodedPacket, EncodedPacketSink, Quality, canEncodeAudio, type Input } from "mediabunny";
@@ -76,10 +78,42 @@ function audioValue(buffer: AudioBuffer, first: number, second: number, fraction
   return value / (1 + Math.SQRT1_2 * Math.max(0, buffer.numberOfChannels - 2));
 }
 
-export async function mixTimelineAudio(timeline: VideoTimeline, sources: TimelineSources, source: AudioWriter, signal: AbortSignal) {
+// A placed sound on the 48 kHz output grid: it covers output samples [begin, end), where `origin` is the output sample of its retained local time 0 and `offset` the pack sample there.
+export type SfxMixSpan = { sound: TimelineSfx; pcm: SfxPcm; begin: number; end: number; origin: number; offset: number };
+
+// Integer spans resolved once per sound; the output boundaries cut the head and tail, the envelope keeps its retained clock.
+export function sfxMixSpans(sounds: readonly TimelineSfx[], pcms: ReadonlyMap<string, SfxPcm>, totalSamples: number): SfxMixSpan[] {
+  return sounds.flatMap((sound) => {
+    const pcm = pcms.get(sound.asset);
+    if (pcm === undefined) throw new Error(`The sound ${sound.asset} was not prepared`);
+    const origin = Math.round(sound.start * AUDIO_RATE);
+    const offset = Math.round(sound.inPoint * AUDIO_RATE);
+    const length = Math.min(Math.round(sound.outPoint * AUDIO_RATE) - offset, pcm.frames - offset);
+    const begin = Math.max(0, origin);
+    const end = Math.min(origin + length, totalSamples);
+    return end > begin ? [{ sound, pcm, begin, end, origin, offset }] : [];
+  });
+}
+
+// Adds the sounds that overlap output samples [at, at + length) into the planar chunk `data`.
+function addSfx(data: Float32Array, at: number, length: number, spans: readonly SfxMixSpan[]) {
+  for (const { sound, pcm, begin, end, origin, offset } of spans) {
+    const first = Math.max(begin, at);
+    const last = Math.min(end, at + length);
+    for (let sample = first; sample < last; sample++) {
+      const gain = sfxEnvelope(sound, (sample - origin) / AUDIO_RATE);
+      const frame = offset + sample - origin;
+      data[sample - at] += gain * pcm.channels[0][frame];
+      data[length + sample - at] += gain * pcm.channels[1][frame];
+    }
+  }
+}
+
+export async function mixTimelineAudio(timeline: VideoTimeline, sources: TimelineSources, source: AudioWriter, signal: AbortSignal, sounds: ReadonlyMap<string, SfxPcm>) {
   const starts = clipStarts(timeline.clips);
   const sampleAt = timelineSampler(timeline.clips, starts);
   const end = Math.round(timelineDuration(timeline.clips) * AUDIO_RATE);
+  const spans = sfxMixSpans(timeline.sfx === undefined ? [] : timeline.sfx, sounds, end);
   type Cursor = { origin: number; buffers: ReturnType<AudioBufferSink["buffers"]>; decoded: IteratorResult<{ buffer: AudioBuffer; timestamp: number }> };
   const cursors = new Map<number, Cursor | null>();
   try {
@@ -119,6 +153,7 @@ export async function mixTimelineAudio(timeline: VideoTimeline, sources: Timelin
       for (const [index, cursor] of cursors) if (cursor !== null && starts[index] + clipDuration(timeline.clips[index]) <= (at + length) / AUDIO_RATE) {
         await cursor.buffers.return(); cursors.set(index, null);
       }
+      addSfx(data, at, length, spans.filter((span) => span.begin < at + length && span.end > at));
       for (let index = 0; index < data.length; index++) data[index] = Math.max(-1, Math.min(1, data[index]));
       const sample = new AudioSample({ data, format: "f32-planar", numberOfChannels: 2, sampleRate: AUDIO_RATE, timestamp: at / AUDIO_RATE });
       try { await source.add(sample); } finally { sample.close(); }

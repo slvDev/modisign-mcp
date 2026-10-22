@@ -47,23 +47,31 @@ export function isValidValue(variable: Variable, value: unknown) {
 const VARIABLE_TYPES = ["string", "color", "boolean", "enum", "number"];
 export const isPositive = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
 
-function validateCondition(where: string, variables: Variable[], variable: Variable, id: string, condition: unknown) {
+function validateCondition(where: string, variables: readonly Variable[], self: Variable | undefined, id: string, condition: unknown, label: string) {
   const controller = variables.find((v) => v.id === id);
-  if (controller === undefined) throw new Error(`${where}: showWhen names unknown variable ${id}`);
-  if (controller === variable) throw new Error(`${where}: showWhen cannot depend on itself`);
+  if (controller === undefined) throw new Error(`${where}: ${label} names unknown variable ${id}`);
+  if (controller === self) throw new Error(`${where}: ${label} cannot depend on itself`);
   if (controller.role === "output" || controller.type === "color" || (controller.type === "number" && controller.custom !== undefined)) {
-    throw new Error(`${where}: showWhen controller ${id} must be a non-output string, boolean, enum or number selector`);
+    throw new Error(`${where}: ${label} controller ${id} must be a non-output string, boolean, enum or number selector`);
   }
   if (Array.isArray(condition)) {
-    if (controller.type === "string") throw new Error(`${where}: showWhen on string ${id} must be {"nonEmpty":true}`);
+    if (controller.type === "string") throw new Error(`${where}: ${label} on string ${id} must be {"nonEmpty":true}`);
     if (condition.length === 0 || new Set(condition).size !== condition.length || !condition.every((value) => isValidValue(controller, value))) {
-      throw new Error(`${where}: showWhen values for ${id} must be distinct valid values`);
+      throw new Error(`${where}: ${label} values for ${id} must be distinct valid values`);
     }
   } else {
     const entries = typeof condition === "object" && condition !== null ? Object.entries(condition) : [];
-    if (entries.length !== 1 || entries[0][0] !== "nonEmpty" || entries[0][1] !== true) throw new Error(`${where}: showWhen condition for ${id} must be a value list or {"nonEmpty":true}`);
+    if (entries.length !== 1 || entries[0][0] !== "nonEmpty" || entries[0][1] !== true) throw new Error(`${where}: ${label} condition for ${id} must be a value list or {"nonEmpty":true}`);
     if (controller.type !== "string") throw new Error(`${where}: nonEmpty needs a string controller, not ${id}`);
-    if (controller.maxLength === 0) throw new Error(`${where}: showWhen nonEmpty on ${id} can never hold (maxLength 0)`);
+    if (controller.maxLength === 0) throw new Error(`${where}: ${label} nonEmpty on ${id} can never hold (maxLength 0)`);
+  }
+}
+
+// The OR-list of AND-maps shared by showWhen and cue conditions.
+function validateClauses(where: string, variables: readonly Variable[], self: Variable | undefined, clauses: unknown[], label: string) {
+  for (const clause of clauses) {
+    if (typeof clause !== "object" || clause === null || Array.isArray(clause) || Object.keys(clause).length === 0) throw new Error(`${where}: ${label} clauses must be nonempty objects`);
+    for (const [id, condition] of Object.entries(clause)) validateCondition(where, variables, self, id, condition, label);
   }
 }
 
@@ -79,10 +87,7 @@ function validateShowWhen(family: string, variables: Variable[], variable: Varia
   }
   if (variable.type === "number" && variable.custom !== undefined) throw new Error(`${where}: a custom number follows its owner and declares no showWhen`);
   if (!Array.isArray(showWhen) || showWhen.length === 0) throw new Error(`${where}: showWhen must be false or a nonempty list of clauses`);
-  for (const clause of showWhen) {
-    if (typeof clause !== "object" || clause === null || Array.isArray(clause) || Object.keys(clause).length === 0) throw new Error(`${where}: showWhen clauses must be nonempty objects`);
-    for (const [id, condition] of Object.entries(clause)) validateCondition(where, variables, variable, id, condition);
-  }
+  validateClauses(where, variables, variable, showWhen, "showWhen");
 }
 
 function assertNoDependencyCycle(family: string, variables: Variable[]) {
@@ -131,6 +136,11 @@ export function validateVariables(family: string, variables: Variable[]) {
   assertNoDependencyCycle(family, variables);
 }
 
+// Whether any clause holds; a clause holds when every named variable matches its condition.
+function matches(clauses: Clause[], values: Values) {
+  return clauses.some((clause) => Object.entries(clause).every(([id, condition]) => holds(id, condition, values[id])));
+}
+
 function holds(id: string, condition: Condition, value: Value | undefined) {
   if (value === undefined) throw new Error(`Missing value for ${id}`);
   if (Array.isArray(condition)) return condition.includes(value);
@@ -147,7 +157,62 @@ export function isRelevant(variables: Variable[], values: Values, variable: Vari
     return values[owner.id] === "custom" && isRelevant(variables, values, owner);
   }
   if (variable.showWhen === undefined) return true;
-  return variable.showWhen.some((clause) => Object.entries(clause).every(([id, condition]) => holds(id, condition, values[id])));
+  return matches(variable.showWhen, values);
+}
+
+// cta-tap: a click, tap or commit contact. key-press: one keyboard press.
+export const CUE_KINDS = ["cta-tap", "key-press"] as const;
+export type CueKind = (typeof CUE_KINDS)[number];
+export const MAX_CUES_PER_FAMILY = 32;
+// `at` is authored composition-local seconds; `when` is the showWhen clause list.
+export type Cue = { id: string; kind: CueKind; at: number; when?: Clause[] };
+
+const CUE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// The one validator for a family's declared cues; `duration` is the root authoring duration.
+export function validateCues(raw: unknown, variables: readonly Variable[], duration: number): Cue[] {
+  if (!Array.isArray(raw)) throw new Error("cues must be an array");
+  if (raw.length > MAX_CUES_PER_FAMILY) throw new Error(`at most ${MAX_CUES_PER_FAMILY} cues, got ${raw.length}`);
+  const ids = new Set<string>();
+  return raw.map((row: unknown) => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) throw new Error("cue must be an object");
+    const keys = Object.keys(row);
+    if (!keys.every((key) => ["id", "kind", "at", "when"].includes(key)) || !["id", "kind", "at"].every((key) => keys.includes(key))) {
+      throw new Error(`cue keys must be id, kind, at and optional when, got ${keys.join()}`);
+    }
+    const { id, kind, at, when } = row as Record<string, unknown>;
+    if (typeof id !== "string" || !CUE_ID.test(id)) throw new Error(`cue id must be a lowercase slug, got ${JSON.stringify(id)}`);
+    if (ids.has(id)) throw new Error(`duplicate cue id ${id}`);
+    ids.add(id);
+    if (!CUE_KINDS.includes(kind as CueKind)) throw new Error(`cue ${id}: kind must be one of ${CUE_KINDS.join()}`);
+    if (typeof at !== "number" || !Number.isFinite(at) || at < 0 || at >= duration) throw new Error(`cue ${id}: at must be a finite number from 0 up to the ${duration} s duration`);
+    if (when !== undefined) {
+      if (!Array.isArray(when) || when.length === 0) throw new Error(`cue ${id}: when must be a nonempty list of clauses`);
+      validateClauses(`cue ${id}`, variables, undefined, when, "when");
+    }
+    return row as Cue;
+  });
+}
+
+// Cues whose condition holds for the complete merged values and that start inside the effective duration, in declaration order.
+export function activeCues(cues: readonly Cue[], values: Values, variables: readonly Variable[], duration: number): Cue[] {
+  for (const variable of variables) if (values[variable.id] === undefined) throw new Error(`Missing value for ${variable.id}`);
+  return cues.filter((cue) => cue.at < duration && (cue.when === undefined || matches(cue.when, values)));
+}
+
+export const ROOT_DURATION = /(<div\b[^>]*\sid="root"[^>]*\sdata-duration=")([\d.]+)"/;
+
+// Reads the optional data-composition-cues declaration from a composition's HTML; none declared is an empty list.
+export function declaredCues(family: string, html: string, variables: readonly Variable[]): Cue[] {
+  const declared = /data-composition-cues='([^']*)'/.exec(html);
+  if (declared === null) return [];
+  const duration = Number(ROOT_DURATION.exec(html)?.[2]);
+  if (!Number.isFinite(duration)) throw new Error(`${family}: root declares no duration`);
+  try {
+    return validateCues(JSON.parse(declared[1]), variables, duration);
+  } catch (error) {
+    throw new Error(`${family}: ${(error as Error).message}`);
+  }
 }
 
 export function validateTemplatePalettes(family: string, variables: Variable[], looks: { id: string; values: unknown }[]) {

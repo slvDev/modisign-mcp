@@ -102,7 +102,7 @@ test('overlay and Studio authorization use exact free-cache identities and fail 
     if (offline) throw new TypeError('Offline fixture');
     return Response.json(result);
   });
-  for (const body of [{ configuration: '/overlays/hook-title?setup=Overlay' }, { kind: 'studio', configurations: [], captionStyle: 'clean', captionCustomized: false }]) {
+  for (const body of [{ configuration: '/overlays/hook-title?setup=Overlay' }, { kind: 'studio', configurations: [], overlayMotionCustomized: false, captionStyle: 'clean', captionCustomized: false, titleEffects: false }, { kind: 'studio', configurations: ['/overlays/hook-title?setup=Overlay'], overlayMotionCustomized: true, captionStyle: null, captionCustomized: false, titleEffects: true }]) {
     const key = `audit:${JSON.stringify(body)}`;
     assert.equal(await authorizeRequest(body, key), 'free');
     offline = true;
@@ -130,9 +130,9 @@ test('overlay and Studio authorization use exact free-cache identities and fail 
   assert.equal(configurationUrl('/overlays/hook-title?setup=%F0%9F%98%80').searchParams.get('setup'), '😀');
   const configuration = '/overlays/hook-title?setup=MalformedCache';
   const cached = {
-    configuration, tier: 'free', editorUrl: 'https://modisign.app' + configuration, relevance: { relevant: ['setup'], irrelevant: [] },
+    configuration, tier: 'free', editorUrl: 'https://modisign.app' + configuration, relevance: { relevant: ['setup'], irrelevant: [] }, activeCues: [],
     render: { compositionUrl: 'https://modisign.app/preview/hook-title?setup=MalformedCache', variables: { setup: 'MalformedCache' }, duration: 3, width: 1080, height: 1920, background: 'green' },
-    studio: { family: { id: 'hook-title', name: 'Hook title', variables: [], supported_aspects: ['9x16'], default_duration: 3, looks: [], freeConfigs: [] }, preset: { family: 'hook-title', id: 'audit', href: configuration }, config: { aspect: '9x16', look: 'default', duration: 3, values: { setup: 'MalformedCache' } } },
+    studio: { family: { id: 'hook-title', name: 'Hook title', variables: [], cues: [], supported_aspects: ['9x16'], default_duration: 3, looks: [], freeConfigs: [] }, preset: { family: 'hook-title', id: 'audit', href: configuration }, config: { aspect: '9x16', look: 'default', duration: 3, values: { setup: 'MalformedCache' } } },
   };
   const { studio: _studio, ...incomplete } = cached;
   const { relevance: _relevance, ...withoutRelevance } = cached;

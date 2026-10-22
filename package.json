@@ -1,6 +1,6 @@
 {
   "name": "@modisign/mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "mcpName": "io.github.slvDev/modisign",
   "description": "Discover and render Modisign animated overlays locally through MCP",
   "type": "module",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.3.1",
+    "@mediapipe/tasks-vision": "0.10.21",
     "@types/node": "22.19.15",
     "esbuild": "0.25.12",
     "typescript": "5.9.3",

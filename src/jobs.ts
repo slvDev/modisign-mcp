@@ -3,7 +3,7 @@ import { errorResult, ToolError } from "./errors.js";
 import { render, validateRender, type Artifact, type RenderInput, type Update } from "./render.js";
 import { renderStudio, validateStudio, type StudioInput } from "./studio.js";
 
-export type JobState = "queued" | "downloading_browser" | "rendering" | "compositing" | "done" | "failed" | "canceled";
+export type JobState = "queued" | "downloading_browser" | "rendering" | "compositing" | "preparing_people_model" | "preparing_people_masks" | "done" | "failed" | "canceled";
 type Snapshot = { job_id: string; state: JobState; progress: number; aspect?: string; artifact?: Artifact; warnings?: string[]; error?: Record<string, unknown> };
 type JobInput = RenderInput | StudioInput;
 const isStudio = (input: JobInput): input is StudioInput => "kind" in input && input.kind === "studio";

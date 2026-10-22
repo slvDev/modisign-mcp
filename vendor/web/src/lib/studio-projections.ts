@@ -6,6 +6,7 @@ import { transparentOverlay } from "@/lib/own-video";
 import { clipStarts, timelineDuration, studioSize, type VideoPreviewTimeline } from "@/lib/video-timeline";
 import { captionLines, styledWords, timelineWords } from "@/lib/captions";
 import { timelineTexts, textSpan, type StudioText } from "@/lib/studio-text";
+import { sfxPlacements, timelineSfx, type SfxPlacement } from "@/lib/studio-sfx";
 import type { StudioClip, StudioMedia, StudioOverlay, StudioState } from "@/lib/studio-state";
 
 export function studioDuration(clips: StudioClip[]) {
@@ -23,20 +24,21 @@ export function clipTime(time: number) {
   return `${sign}${Math.floor(tenths / 600)}:${((tenths % 600) / 10).toFixed(1).padStart(4, "0")}`;
 }
 
-export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "overlays" | "texts" | "aspect" | "transcripts" | "wordStyles" | "captions">): VideoPreviewTimeline {
+export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "overlays" | "texts" | "sfx" | "aspect" | "transcripts" | "wordStyles" | "captions">): VideoPreviewTimeline {
   const starts = clipStarts(state.clips);
   return { clips: state.clips.map((clip, index) => {
     if (clip.mediaId === null) throw new Error("Relink every missing clip before rendering");
     const media = mediaById(state.media, clip.mediaId);
-    const schedule = { id: clip.id, track: clip.track, startsAt: starts[index], crop: clip.crop, place: clip.place };
+    const schedule = { id: clip.id, track: clip.track, startsAt: starts[index], crop: clip.crop, place: clip.place, motion: clip.motion };
     return media.kind === "photo" ? { ...media.source, ...schedule, kind: "photo", duration: clip.outPoint - clip.inPoint, sourceStart: clip.sourceStart, punchIns: clip.punchIns, settings: clip.settings, transition: clip.transition }
       : { ...media.source, ...schedule, kind: "video", transition: clip.transition, inPoint: clip.inPoint, outPoint: clip.outPoint, punchIns: clip.punchIns, settings: clip.settings };
   }),
     ...studioSize(state.aspect), frameRate: 30,
     texts: timelineTexts(state.texts, state.clips),
+    sfx: timelineSfx(state),
     captions: state.captions === null ? undefined : { ...state.captions, lines: captionLines(styledWords(timelineWords(state.clips, state.transcripts), state.captions, state.wordStyles), state.captions.style) },
-    overlays: state.overlays.map(({ id, family, config, start }) => ({
-      id,
+    overlays: state.overlays.map(({ id, family, config, start, motion }) => ({
+      id, motion,
       src: previewHref(family.id, transparentOverlay(configOptions(family, family.looks, { ...config, aspect: state.aspect }))),
       ...ASPECTS[state.aspect], duration: config.duration, startsAt: start,
     })) };
@@ -73,14 +75,23 @@ export function textLanes(texts: StudioText[], clips: StudioClip[]) {
   const starts = clipStarts(clips);
   return laneRows(texts, (title) => textSpan(title, clips, starts));
 }
+// The part of a sound on the timeline (an inactive one sits at its nearest boundary with no width).
+export function sfxLaneSpan(placement: SfxPlacement, total: number) {
+  const start = Math.max(0, Math.min(placement.start, total));
+  return placement.inactive === null ? { start, end: Math.min(total, placement.start + placement.length) } : { start, end: start };
+}
+// The SFX lane: overlapping sounds on stacked rows.
+export const sfxLanes = (placements: SfxPlacement[], total: number) => laneRows(placements, (placement) => sfxLaneSpan(placement, total));
+// The SFX lane height in rows, at least one.
+export const sfxRows = (state: StudioState) => Math.max(1, sfxLanes(sfxPlacements(state), studioDuration(state.clips)).length);
 export function studioTime(time: number) {
   const frames = Math.max(0, Math.round(time * 30));
   return [Math.floor(frames / 1800), Math.floor(frames / 30) % 60, frames % 30]
     .map((value) => value.toString().padStart(2, "0")).join(":");
 }
 
-export function snapTime(time: number, targets: number[], pixelsPerSecond: number, enabled: boolean) {
-  const frame = Math.round(time * 30) / 30;
+export function snapTime(time: number, targets: number[], pixelsPerSecond: number, enabled: boolean, rate = 30) {
+  const frame = Math.round(time * rate) / rate;
   if (!enabled) return frame;
   const near = targets.filter((target) => Math.abs(target - time) * pixelsPerSecond <= 8);
   return near.length === 0 ? frame : near.reduce((best, target) => Math.abs(target - time) < Math.abs(best - time) ? target : best, near[0]);
@@ -93,5 +104,6 @@ export function snapTargets(state: StudioState, excludeId?: string) {
   }
   for (const overlay of state.overlays) if (overlay.id !== excludeId) targets.push(overlay.start, overlay.start + overlay.config.duration);
   for (const title of state.texts) if (title.id !== excludeId) { const { start, end } = textSpan(title, state.clips, starts); targets.push(start, end); }
+  for (const placement of sfxPlacements(state)) if (placement.sfx.id !== excludeId && placement.inactive === null) { const { start, end } = sfxLaneSpan(placement, studioDuration(state.clips)); targets.push(start, end); }
   return targets;
 }

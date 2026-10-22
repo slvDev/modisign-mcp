@@ -1,0 +1,99 @@
+Modisign sound pack ugc-1
+=========================
+
+This folder holds ten short sound effects used by Modisign Studio and the
+Modisign MCP edit_video tool. They are third-party recordings, not Modisign
+designs. Each one was published by its author or publisher under CC0 1.0
+Universal (public domain dedication). The legal code is in licenses/CC0-1.0.txt.
+
+CC0 requires no credit. The lines below are given voluntarily, so you can find
+the sources. Sound names are the names Modisign shows.
+
+Credits and the form each file derives from
+-------------------------------------------
+
+ugc-click-01  Interface click
+  Kenney, Interface Sounds 1.0, Audio/click_001.ogg
+  https://kenney.nl/assets/interface-sounds
+  Derived from the original file in the Kenney archive.
+
+ugc-click-02  Mouse click
+  Kenney, UI Audio 1.0, Audio/mouseclick1.ogg
+  https://kenney.nl/assets/ui-audio
+  Derived from the original file in the Kenney archive.
+
+ugc-typing-01  Keyboard burst
+  "Keyboard typing" by Breviceps, Freesound sound 447909
+  https://freesound.org/people/Breviceps/sounds/447909/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+ugc-typing-02  Single mechanical key
+  "Single Mechanical Keyboard Tap.wav" by Professor-Syntax, Freesound sound 523768
+  https://freesound.org/people/Professor-Syntax/sounds/523768/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+ugc-whoosh-01  Bamboo swish
+  "Whoosh" by qubodup, Freesound sound 60013
+  https://freesound.org/people/qubodup/sounds/60013/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+ugc-whoosh-02  Air sweep
+  "Woosh" by florianreichelt, Freesound sound 683096
+  https://freesound.org/people/florianreichelt/sounds/683096/
+  Derived from the lossy HQ preview MP3, not the original upload. The original
+  upload is itself an MP3.
+
+ugc-pop-01  Bubble pop
+  "Bubble_Pop" by arttim, Freesound sound 733264
+  https://freesound.org/people/arttim/sounds/733264/
+  Derived from the lossy HQ preview MP3, not the original upload. The original
+  upload is itself an MP3.
+
+ugc-pop-02  Mouth pop
+  "Popping Sound Made with Mouth" by magicjoshua, Freesound sound 704170
+  https://freesound.org/people/magicjoshua/sounds/704170/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+ugc-sparkle-01  Cartoon sparkle
+  "cartoon_wink_magic_sparkle.wav" by MLaudio, Freesound sound 511485
+  https://freesound.org/people/MLaudio/sounds/511485/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+ugc-sparkle-02  Magic chime
+  "SFX Magic" by renatalmar, Freesound sound 264981
+  https://freesound.org/people/renatalmar/sounds/264981/
+  Derived from the lossy HQ preview MP3, not the original upload.
+
+Each Freesound sound page showed the licence "Creative Commons 0" when it was
+read on 2026-10-21 (see manifest.json for the exact line and per-file hashes).
+The Kenney licence files are included verbatim as
+licenses/kenney-interface-sounds-License.txt and
+licenses/kenney-ui-audio-License.txt.
+
+What was changed
+----------------
+
+Each sound was decoded and converted to 16-bit stereo WAV at 48 000 Hz (mono
+sources are duplicated to both channels) and had its leading silence trimmed
+(and, for ugc-sparkle-01, a long silent tail). No gain, loudness
+normalization, filter or effect was applied. manifest.json records the exact
+conversion command, trimmed frame counts and SHA-256 of each source and each
+distributed file.
+
+Not endorsed, no warranty
+-------------------------
+
+Kenney, Freesound and the individual authors do not endorse, sponsor or
+approve Modisign or any video made with it. Their names are credited only
+to identify the sources. These sounds are provided as is, without warranty. In
+particular, Modisign does not clear third-party claims: an uploader's CC0
+declaration can be wrong, and automated copyright systems on video platforms
+can flag short sounds incorrectly.
+
+Where to find the data
+----------------------
+
+manifest.json in this folder lists every file, its source, its licence
+evidence, its hashes and its conversion. Files are named
+<id>.<first 8 hex characters of the SHA-256>.wav, so a changed file always has
+a new name.

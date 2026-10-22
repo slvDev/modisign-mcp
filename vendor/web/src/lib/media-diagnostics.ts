@@ -1,20 +1,23 @@
 // generated from the Modisign monorepo, do not edit
-export type DiagnosticArea = "picker" | "import" | "commit" | "preview" | "native" | "audio" | "analysis" | "asr" | "lifecycle" | "resource" | "compare" | "measure";
+export type DiagnosticArea = "picker" | "import" | "commit" | "preview" | "native" | "audio" | "analysis" | "asr" | "lifecycle" | "resource" | "measure";
 export type MarkDetail = Record<string, string | number | boolean | null>;
 export type DiagnosticRecord = { id: number; at: number; area: DiagnosticArea; name: string; detail: MarkDetail | null };
 export type PendingPhase = { id: number; at: number; area: DiagnosticArea; name: string };
-export type DiagnosticsSnapshot = { records: readonly DiagnosticRecord[]; pinned: readonly DiagnosticRecord[]; pinnedDropped: number; pending: readonly PendingPhase[] };
+export type DiagnosticsSnapshot = { records: readonly DiagnosticRecord[]; pinned: readonly DiagnosticRecord[]; slow: readonly DiagnosticRecord[]; pinnedDropped: number; pending: readonly PendingPhase[] };
 
-const LIMIT = 200;
+const LIMIT = 600;
 // The first semantic milestones survive the rolling tail.
 const PIN_LIMIT = 128;
+// The most recent slow waits (and their ends) survive it too.
+const SLOW_LIMIT = 20;
 let enabled: boolean | null = null;
 let records: DiagnosticRecord[] = [];
 let pinned: DiagnosticRecord[] = [];
+let slow: DiagnosticRecord[] = [];
 let pinnedDropped = 0;
 const pinnedOnce = new Set<string>();
 const pending = new Map<number, PendingPhase>();
-let snapshot: DiagnosticsSnapshot = { records, pinned, pinnedDropped, pending: [] };
+let snapshot: DiagnosticsSnapshot = { records, pinned, slow, pinnedDropped, pending: [] };
 let nextId = 1;
 const listeners = new Set<() => void>();
 const snapshots = new Map<string, () => MarkDetail>();
@@ -30,7 +33,7 @@ export function diagnosticsEnabled() {
 }
 
 function publish() {
-  snapshot = { records, pinned, pinnedDropped, pending: [...pending.values()] };
+  snapshot = { records, pinned, slow, pinnedDropped, pending: [...pending.values()] };
   listeners.forEach((listener) => listener());
 }
 
@@ -58,16 +61,28 @@ export function errorDetail(error: unknown): MarkDetail {
   return { error: "unknown", message: redact(String(error)) };
 }
 
+function record(area: DiagnosticArea, name: string, detail: MarkDetail | null) {
+  const clean = detail === null ? null : Object.fromEntries(Object.entries(detail).map(([key, value]) => [key, typeof value === "string" ? redact(value) : value]));
+  const next = { id: nextId++, at: Math.round(performance.now() * 10) / 10, area, name, detail: clean };
+  records = [...records.slice(1 - LIMIT), next];
+  return next;
+}
+
 // `pin` keeps the record in the bounded early segment as well as the rolling tail.
 export function mark(area: DiagnosticArea, name: string, detail: MarkDetail | null = null, pin = false) {
   if (!diagnosticsEnabled()) return;
-  const clean = detail === null ? null : Object.fromEntries(Object.entries(detail).map(([key, value]) => [key, typeof value === "string" ? redact(value) : value]));
-  const record = { id: nextId++, at: Math.round(performance.now() * 10) / 10, area, name, detail: clean };
-  records = [...records.slice(1 - LIMIT), record];
+  const next = record(area, name, detail);
   if (pin) {
-    if (pinned.length < PIN_LIMIT) pinned = [...pinned, record];
+    if (pinned.length < PIN_LIMIT) pinned = [...pinned, next];
     else pinnedDropped++;
   }
+  publish();
+}
+
+// Keeps the record in the bounded segment of the latest slow waits (and their ends), which the rolling tail would otherwise lose.
+export function markSlow(area: DiagnosticArea, name: string, detail: MarkDetail | null = null) {
+  if (!diagnosticsEnabled()) return;
+  slow = [...slow.slice(1 - SLOW_LIMIT), record(area, name, detail)];
   publish();
 }
 
@@ -108,6 +123,7 @@ export const diagnosticsSnapshot = () => snapshot;
 export function clearDiagnostics() {
   records = [];
   pinned = [];
+  slow = [];
   pinnedDropped = 0;
   pinnedOnce.clear();
   pending.clear();
@@ -136,6 +152,6 @@ export function diagnosticsReport(device: string) {
   return JSON.stringify({
     device: redact(device), userAgent: navigator.userAgent, apis: apiPresence(), visibility: document.visibilityState,
     snapshots: readSnapshots(), pending: snapshot.pending.map(({ area, name, at }) => ({ area, name, startedAt: Math.round(at) })),
-    pinned: snapshot.pinned, pinnedDropped: snapshot.pinnedDropped, records: snapshot.records.filter((record) => !snapshot.pinned.includes(record)),
+    pinned: snapshot.pinned, slow: snapshot.slow, pinnedDropped: snapshot.pinnedDropped, records: snapshot.records.filter((entry) => !snapshot.pinned.includes(entry) && !snapshot.slow.includes(entry)),
   }, null, 1);
 }

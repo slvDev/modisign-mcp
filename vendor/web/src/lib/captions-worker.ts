@@ -14,7 +14,10 @@ if (new URL(self.location.href).pathname === "/captions-worker.js") env.remoteHo
 const wasm = env.backends.onnx.wasm;
 if (wasm === undefined) throw new Error("The speech WASM runtime is unavailable");
 wasm.numThreads = 1;
-wasm.wasmPaths = `${self.location.origin}/speech-runtime/${version}/`;
+// Both files are named: a directory prefix still lets ORT pick the Asyncify/JSEP build.
+const RUNTIME_FILES = { mjs: "ort-wasm-simd-threaded.mjs", wasm: "ort-wasm-simd-threaded.wasm" } as const;
+const runtimeBase = `${self.location.origin}/speech-runtime/${version}/`;
+wasm.wasmPaths = { mjs: runtimeBase + RUNTIME_FILES.mjs, wasm: runtimeBase + RUNTIME_FILES.wasm };
 
 const AUDIO_UNSUPPORTED = "This browser cannot decode the audio needed for captions. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.";
 const FAILED = { audio: "Audio preparation failed", model: "Speech model failed to load", inference: "Transcription failed" } as const;
@@ -37,6 +40,27 @@ function inputsChanged(change: number) {
   if (debug) send({ type: "inputs", open: openInputs });
 }
 
+// What the browser actually fetched for the ORT runtime, so a JSEP build can never hide behind the configured names.
+function loadedRuntime(): MarkDetail {
+  const files = (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .map((entry) => ({ name: new URL(entry.name).pathname.split("/").pop() as string, bytes: entry.decodedBodySize }))
+    .filter(({ name }) => name.startsWith("ort-wasm"));
+  const binary = files.find(({ name }) => name.endsWith(".wasm"));
+  return {
+    files: files.map(({ name }) => name).join(" "), wasmBytes: binary === undefined ? null : binary.bytes,
+    variant: files.length === 0 ? "unobserved" : files.some(({ name }) => name.includes(".jsep")) ? "jsep" : "plain",
+  };
+}
+
+const reportCapabilities = () => {
+  if (!debug) return;
+  send({ type: "mark", name: "capabilities", detail: {
+    backend: ASR_BACKEND, ort: env.backends.onnx.versions?.web ?? null, threads: wasm.numThreads ?? null, proxy: wasm.proxy ?? null, simd: wasm.simd ?? null,
+    configuredMjs: RUNTIME_FILES.mjs, configuredWasm: RUNTIME_FILES.wasm,
+    audioDecoder: typeof AudioDecoder !== "undefined", sharedArrayBuffer: typeof SharedArrayBuffer !== "undefined", crossOriginIsolated: self.crossOriginIsolated,
+  } });
+};
+
 async function loadModel(id: number) {
   if (transcriber !== null) return transcriber;
   const end = phase("model:load");
@@ -57,6 +81,7 @@ async function loadModel(id: number) {
   transcriber = await pipeline<"automatic-speech-recognition">("automatic-speech-recognition", SPEECH_MODEL, options);
   report(1);
   end();
+  if (debug) send({ type: "mark", name: "model:ready", detail: loadedRuntime() });
   return transcriber;
 }
 
@@ -128,7 +153,9 @@ async function transcribe({ id, file, duration }: AsrRequest) {
       send({ type: "progress", id, progress: { phase: "transcribe", seconds: covered, total: duration } });
       if (!part.last) { stage = "audio"; prepared = phase("window:audio", { index: windows.length }); }
     }
+    const stitched = phase("stitch", { windows: windows.length });
     const words = stitchCaptionWindows(windows);
+    stitched({ words: words.length });
     if (debug) send({ type: "mark", name: "result", detail: { windows: windows.length, words: words.length } });
     send({ type: "done", id, words, audio: true });
   } catch (error) {
@@ -143,5 +170,6 @@ async function transcribe({ id, file, duration }: AsrRequest) {
 
 self.onmessage = (event: MessageEvent<AsrRequest>) => {
   debug = event.data.debug;
+  reportCapabilities();
   void transcribe(event.data);
 };

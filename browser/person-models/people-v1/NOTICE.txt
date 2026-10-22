@@ -1,0 +1,95 @@
+Modisign people-v1 segmentation assets
+======================================
+
+Modisign Studio can place a title behind the people in a footage clip. It does
+this on the device with a small person-segmentation model and the MediaPipe
+Tasks Vision runtime. Both are third-party works under the Apache License,
+Version 2.0 (licenses/Apache-2.0.txt). Nothing here is a Modisign design.
+The model, the wasm and the loader files are distributed without modification.
+person-worker.js is Modisign code that bundles the runtime's JavaScript API. The
+probe image is a downscaled frame of a public-domain video. This file and licenses/ accompany
+the model on the website and, as a copy, the runtime files under
+/person-runtime/0.10.21/. Every other place Modisign distributes these files
+(such as the MCP npm package) carries the same file and folder.
+
+Files and provenance
+--------------------
+
+selfie_segmenter.191ac952.tflite
+  MediaPipe Selfie Segmenter, square model, float16, version 1.
+  Upstream: https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite
+  Google Cloud Storage generation 1683436452886295 (created 2023-05-07).
+  Length 249537 bytes. GCS MD5 Oy4+HPx9MVOMrwD/Tg+6jA==.
+  SHA-256 of the distributed bytes: 191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b
+  Input 256 x 256 x 3, output 256 x 256 x 1 person mask.
+  Licence: Apache-2.0, stated on the model card
+  https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf
+  (SHA-256 of the card PDF as read: ef2e8d350891ba71699ac1e079658e697fc8d48c0f9253922990e907ecdade60).
+  Modifications: none (the file is byte-identical to the download).
+
+probe.be80a657.png
+  A 256 x 256 frame (ffmpeg bicubic scaling, RGB) taken at 20 s of
+  "NASA Astronaut Mark Vande Hei on setting the record for longest single spaceflight for an American.webm",
+  https://commons.wikimedia.org/wiki/File:NASA_Astronaut_Mark_Vande_Hei_on_setting_the_record_for_longest_single_spaceflight_for_an_American.webm
+  Public domain (work of NASA, a United States government agency).
+  Length 168632 bytes.
+  SHA-256: be80a657254a434794693d988cd4ca63f0476d4c187a2aeb365f2127ffec17c5
+  The worker segments it at start-up and refuses to run when the person region
+  is not marked as person.
+
+Runtime: @mediapipe/tasks-vision 0.10.21 (npm, Apache-2.0)
+  https://registry.npmjs.org/@mediapipe/tasks-vision/0.10.21
+  npm integrity sha512-TuhKH+credq4zLksGbYrnvJ1aLIWMc5r0UHwzxzql4BHECJwIAoBR61ZrqwGOW6ZmSBIzU1t4VtKj8hbxFaKeA==
+  Upstream source tag: https://github.com/google-ai-edge/mediapipe/tree/v0.10.21
+  Distributed files, copied unmodified from wasm/ in the package:
+    vision_wasm_internal.js           204284 bytes  SHA-256 4a97e2520ba506c680ecd6ba6acfb146888afa0e2746d57f205352bc6ebb82eb
+    vision_wasm_internal.wasm        9574032 bytes  SHA-256 f00ec4731faa23b3e714d00e88d4d10e2df5c0a427d3a2b4ae6e3526fdd14ef7
+    vision_wasm_nosimd_internal.js    204137 bytes  SHA-256 927def7b465c51b86e4b3060f93646aca4e27121f4b8fc0483786e407ea9cf1f
+    vision_wasm_nosimd_internal.wasm 9448638 bytes  SHA-256 3821ea9b1f7fb8c549ef2a064ef5c85750bf375c545a49fd6eea0df44a95f1f4
+  person-worker.js is built from the JavaScript API of the same package
+  (vision_bundle.mjs, SHA-256 40f4123dfcd75cfa58add046919cc6f52fde66f009ff582997c09ba54c6ba27c)
+  and Modisign's own worker source.
+  The package ships no LICENSE or NOTICE file, and the upstream repository has no
+  NOTICE file at v0.10.21 (checked: raw.githubusercontent.com/.../v0.10.21/NOTICE returns 404).
+  licenses/Apache-2.0.txt is the upstream repository's LICENSE at that tag, which
+  also carries the one third-party notice the upstream repository attaches to it.
+
+Third-party code compiled into the WebAssembly
+----------------------------------------------
+
+The upstream project publishes no consolidated notice for the compiled runtime.
+The list below comes from the pinned upstream WORKSPACE at v0.10.21
+(https://github.com/google-ai-edge/mediapipe/blob/v0.10.21/WORKSPACE) and from
+source paths and version strings found in vision_wasm_internal.wasm. A
+component is listed when its code is present or is a declared build dependency
+of the pinned TensorFlow Lite and XNNPACK revisions. The licence texts were
+downloaded from each project at the revision named.
+
+  MediaPipe, v0.10.21                         Apache-2.0   licenses/Apache-2.0.txt
+  TensorFlow / TensorFlow Lite, commit 5329ec8dd396487982ef3e743f98c0195af39a6b
+                                              Apache-2.0   licenses/Apache-2.0.txt
+  Abseil C++, commit 9687a8ea750bfcddf790372093245a1d041b21a3
+                                              Apache-2.0   licenses/Apache-2.0.txt
+  OpenCV 4.10.0 (version string in the binary)
+                                              Apache-2.0   licenses/Apache-2.0.txt
+  FlatBuffers, gemmlowp, ruy (TensorFlow Lite dependencies)
+                                              Apache-2.0   licenses/Apache-2.0.txt
+  XNNPACK, commit dc1549a7141c7a9496ae160bb27b8700f0f6e1f1
+                                              BSD-style    licenses/XNNPACK-BSD.txt
+  Protocol Buffers (version not verified)     BSD-3-Clause licenses/protobuf-BSD-3-Clause.txt
+  FP16 (half-precision conversion used by XNNPACK)
+                                              MIT          licenses/FP16-MIT.txt
+  Eigen 3.4.0 (TensorFlow Lite dependency)    MPL-2.0      licenses/Eigen-MPL-2.0.txt
+  Emscripten runtime and libraries            MIT and UIUC licenses/emscripten-MIT-UIUC.txt
+
+Apache-2.0 notices of the projects above ("Copyright The TensorFlow Authors",
+"Copyright Google LLC" and similar) are retained in the upstream sources; the
+wasm is the upstream build, unmodified. Eigen is licensed under MPL-2.0: its source is public at
+https://gitlab.com/libeigen/eigen, and Modisign has not modified it.
+
+Using these files
+-----------------
+
+These files are served to the browser so the model runs on the device. The
+footage never leaves it. The Apache-2.0 grants are separate from Modisign's own
+terms for exports and from the rights a user has in their footage.

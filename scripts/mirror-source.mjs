@@ -1,4 +1,4 @@
-import { STUDIO_ASSETS } from "./studio-assets.mjs";
+import { STUDIO_ASSETS, copyPersonModelSource, copySfxPack } from "./studio-assets.mjs";
 import ts from "typescript";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -13,7 +13,7 @@ if (option === "--output" && destination === undefined) throw new Error("A mirro
 const config = ts.readConfigFile(join(root, "tsconfig.json"), ts.sys.readFile);
 if (config.error !== undefined) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
 const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root, undefined, join(root, "tsconfig.json"));
-const program = ts.createProgram([...parsed.fileNames, join(monorepo, "web/src/lib/captions-worker.ts")], parsed.options);
+const program = ts.createProgram([...parsed.fileNames, join(monorepo, "web/src/lib/captions-worker.ts"), join(monorepo, "web/src/lib/person-worker.ts")], parsed.options);
 const diagnostics = ts.getPreEmitDiagnostics(program).filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
 if (diagnostics.length !== 0) throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
   getCurrentDirectory: () => root, getCanonicalFileName: (file) => file, getNewLine: () => "\n",
@@ -68,6 +68,10 @@ if (option === "--check") {
         await cp(join(root, file), join(output, file));
       }
     }
+    await copySfxPack(root, join(output, "browser"));
+    await copyPersonModelSource(root, join(output, "browser"));
+    await mkdir(join(output, "scripts"), { recursive: true });
+    await cp(join(monorepo, "web/scripts/person-runtime.mjs"), join(output, "scripts/person-runtime.mjs"));
     for (const path of ["README.md", "TECHNICAL.md", "LICENSE", "NOTICE", "server.json", "package.json", "tsconfig.json"]) {
       await cp(join(root, path), join(output, path));
     }

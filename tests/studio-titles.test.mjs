@@ -50,7 +50,6 @@ test('titles take defaults only from the shared style, validate every field and 
     [{ text: 'a'.repeat(121), start: 0, duration: 1 }, 'texts.0.text'],
     [{ text: 'a', timestamp: 'none', clip: 0 }, 'texts.0.timestamp'],
     [{ text: 'a', timestamp: 'source', start: 0, duration: 1 }, 'texts.0.timestamp'],
-    [{ text: 'a', clip: 1 }, 'texts.0.clip'],
     [{ text: 'a', clip: 2 }, 'texts.0.clip'],
     [{ text: 'a', clip: -1 }, 'texts.0.clip'],
     [{ text: 'a', clip: 0.5 }, 'texts.0.clip'],
@@ -79,6 +78,79 @@ test('titles take defaults only from the shared style, validate every field and 
   assert.throws(() => validateEdit(input([v1('a')], { texts: Array.from({ length: 101 }, () => ({ text: 'a', clip: 0 })) })), field('texts'));
   assert.throws(() => validateEdit(input([v1('a')], { texts: {} })), field('texts'));
   assert.doesNotThrow(() => validateEdit(input([v1('a')], { texts: Array.from({ length: 100 }, () => ({ text: 'a', clip: 0 })) })));
+});
+
+test('title reveals are stored complete from the shared default and fail by request field before any I/O', () => {
+  const FULL = { x: 0, y: 0, width: 1, height: 1 };
+  const DEFAULT_REVEAL = { rect: FULL, direction: 'up', start: 0, duration: 0.4, easing: 'ease-out' };
+  const ok = [
+    [{}, DEFAULT_REVEAL],
+    [{ direction: 'right' }, { ...DEFAULT_REVEAL, direction: 'right' }],
+    [{ rect: { x: 0.5, width: 0.5 } }, { ...DEFAULT_REVEAL, rect: { x: 0.5, y: 0, width: 0.5, height: 1 } }],
+    [{ rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, direction: 'left', start: 0.5, duration: 1.5, easing: [0.1, 0.2, 0.3, 0.4] },
+      { rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, direction: 'left', start: 0.5, duration: 1.5, easing: [0.1, 0.2, 0.3, 0.4] }],
+    [{ direction: 'down', start: 180, duration: 10, easing: 'hold', rect: { width: 0.01, height: 0.01 } }, { ...DEFAULT_REVEAL, direction: 'down', start: 180, duration: 10, easing: 'hold', rect: { x: 0, y: 0, width: 0.01, height: 0.01 } }],
+    [{ duration: 1 / 30 }, { ...DEFAULT_REVEAL, duration: 1 / 30 }],
+  ];
+  for (const [reveal, expected] of ok) {
+    const edit = input([v1('a')], { texts: [{ text: 'Hi', clip: 0, reveal }] });
+    assert.doesNotThrow(() => validateEdit(edit), JSON.stringify(reveal));
+    const [title] = mapTexts(edit, mapClips(edit, [video(3)]));
+    assert.deepEqual(title.reveal, expected, JSON.stringify(reveal));
+    assert.equal(Object.hasOwn(title, 'animationOffset'), false);
+  }
+  const plain = input([v1('a')], { texts: [{ text: 'Hi', clip: 0 }] });
+  assert.equal(Object.hasOwn(mapTexts(plain, mapClips(plain, [video(3)]))[0], 'reveal'), false);
+  const bad = [
+    ['wipe', 'texts.0.reveal'], [null, 'texts.0.reveal'], [[], 'texts.0.reveal'], [{ phase: 1 }, 'texts.0.reveal'], [{ animationOffset: 1 }, 'texts.0.reveal'],
+    [{ rect: 5 }, 'texts.0.reveal.rect'], [{ rect: { z: 1 } }, 'texts.0.reveal.rect'], [{ rect: { x: 0.6, width: 0.6 } }, 'texts.0.reveal.rect'], [{ rect: { y: 0.5, height: 0.6 } }, 'texts.0.reveal.rect'],
+    [{ rect: { width: 0.005 } }, 'texts.0.reveal.rect'], [{ rect: { height: 0 } }, 'texts.0.reveal.rect'], [{ rect: { x: -0.1 } }, 'texts.0.reveal.rect'], [{ rect: { y: '0' } }, 'texts.0.reveal.rect'],
+    [{ direction: 'diagonal' }, 'texts.0.reveal.direction'], [{ direction: 1 }, 'texts.0.reveal.direction'],
+    [{ start: -0.1 }, 'texts.0.reveal.start'], [{ start: 180.1 }, 'texts.0.reveal.start'], [{ start: NaN }, 'texts.0.reveal.start'],
+    [{ duration: 0 }, 'texts.0.reveal.duration'], [{ duration: 0.03 }, 'texts.0.reveal.duration'], [{ duration: 10.01 }, 'texts.0.reveal.duration'], [{ duration: '1' }, 'texts.0.reveal.duration'],
+    [{ easing: 'bounce' }, 'texts.0.reveal.easing'], [{ easing: [1, 2, 3, 4] }, 'texts.0.reveal.easing'], [{ easing: [0, 0, 0] }, 'texts.0.reveal.easing'],
+  ];
+  for (const [reveal, name] of bad) assert.throws(() => validateEdit(input([v1('a')], { texts: [{ text: 'Hi', clip: 0, reveal }] })), field(name), JSON.stringify(reveal));
+  assert.throws(() => validateEdit(input([v1('a')], { texts: [{ text: 'Hi', clip: 0 }, { text: 'Hi', start: 0, duration: 1, reveal: { duration: 0 } }] })), field('texts.1.reveal.duration'));
+});
+
+const keyRows = (...keys) => keys.map(([at, value, easing = 'linear']) => ({ at, value, easing }));
+const FADE_IN = { opacity: keyRows([0, 0, 'ease-out'], [0.5, 1]) };
+const OVERLAY_URL = '/overlays/hook-title?setup=Hello';
+const keyRun = count => Array.from({ length: count }, (_, index) => ({ at: index * 0.5, value: 0.5, easing: 'linear' }));
+
+test('title and overlay motion keeps local-second rows, has no phase field and fails by request field', () => {
+  const slide = { x: keyRows([0, 0], [1, -0.15, [0.25, 0.1, 0.25, 1]]) };
+  const edit = input([v1('a'), v1('b')], { texts: [{ text: 'Watch this', start: 0, duration: 4, motion: FADE_IN }, { text: 'Bound', clip: 1, motion: slide }, { text: 'Still', clip: 0 }], overlays: [{ configuration: OVERLAY_URL, start: 0, motion: FADE_IN }] });
+  const [explicit, bound, still] = mapTexts(edit, mapClips(edit, [video(4), video(4)]));
+  assert.deepEqual([explicit.motion, bound.motion], [FADE_IN, slide]);
+  for (const title of [explicit, bound, still]) assert.equal(Object.hasOwn(title, 'animationOffset'), false);
+  assert.equal(Object.hasOwn(still, 'motion'), false);
+  assert.deepEqual(editDocument(edit, media(2, 4)).texts.map(title => Object.hasOwn(title, 'motion')), [true, true, false]);
+  const places = {
+    texts: motion => input([v1('a')], { texts: [{ text: 'a', clip: 0 }, { text: 'b', start: 0, duration: 1, motion }] }),
+    overlays: motion => input([v1('a')], { overlays: [{ configuration: OVERLAY_URL, start: 0 }, { configuration: OVERLAY_URL, start: 0, motion }] }),
+  };
+  const later = 'Motion scale[1].at must be later than the previous key';
+  const table = [
+    [null, 'Motion must be an object of channels'], [{}, 'Motion needs at least one channel'], [{ blur: keyRows([0, 1]) }, 'Motion has no blur channel. Use x, y, scale, rotation, opacity'],
+    [{ scale: keyRows([0, 1], [1, 6]) }, 'Motion scale[1].value must be between 0.1 and 5'], [{ opacity: keyRows([0, -0.1]) }, 'Motion opacity[0].value must be between 0 and 1'],
+    [{ opacity: keyRows([181, 1]) }, 'Motion opacity[0].at must be between 0 and 180 seconds'], [{ opacity: keyRows([-0.5, 1]) }, 'Motion opacity[0].at must be between 0 and 180 seconds'],
+    [{ scale: keyRows([1, 1], [1, 1.2]) }, later], [{ scale: keyRows([2, 1], [1, 1.2]) }, later], [{ scale: keyRows([1, 1], [1.0000005, 1.2]) }, later],
+    [{ x: [{ at: 0, value: 0, easing: 'bounce' }] }, 'Motion x[0].easing must be hold, linear, ease-in, ease-out, ease-in-out or four numbers between 0 and 1'], [{ x: [{ at: 0, value: 0 }] }, 'Motion x[0] needs exactly at, value and easing'],
+    [{ rotation: keyRun(61) }, 'Motion rotation has at most 60 keys'],
+  ];
+  for (const [name, build] of Object.entries(places)) {
+    for (const [motion, reason] of table) assert.throws(() => validateEdit(build(motion)), error => error.details.field === `${name}.1.motion` && error.message === `Invalid ${name}.1.motion: ${reason}.`, `${name} ${JSON.stringify(motion)}`);
+    for (const at of [0, 180]) assert.doesNotThrow(() => validateEdit(build({ opacity: keyRows([at, 1]) })));
+  }
+  // The phase offset is saved structure created by edits, never a request field.
+  assert.throws(() => validateEdit(input([v1('a')], { texts: [{ text: 'a', clip: 0, motion: FADE_IN, animationOffset: 1 }] })), field('texts.0'));
+  assert.throws(() => validateEdit(input([v1('a')], { overlays: [{ configuration: OVERLAY_URL, start: 0, motion: FADE_IN, animationOffset: 1 }] })), field('overlays'));
+  // One request holds at most 1000 keys across clips, titles and overlays.
+  const counted = overlayKeys => input([v1('a')], { texts: Array.from({ length: 16 }, () => ({ text: 'a', clip: 0, motion: { x: keyRun(60) } })), overlays: [{ configuration: OVERLAY_URL, start: 0, motion: { y: keyRun(overlayKeys) } }] });
+  assert.doesNotThrow(() => validateEdit(counted(40)));
+  assert.throws(() => validateEdit(counted(41)), field('motion'));
 });
 
 test('titles are checked against the mapped timeline: photos have no source stamp and explicit starts stay inside', () => {
@@ -227,4 +299,73 @@ test('the structural intro check runs before silence removal and a clip with no 
   const gone = editDocument(long, media(5));
   gone.clips = gone.clips.filter(clip => clip.id !== 'clip-2');
   assert.throws(() => applyRapidIntro(gone, long.rapid_intro), error => error.details.field === 'rapid_intro.clips' && /clip 2 has no footage left after silence removal/.test(error.message));
+});
+
+test('rapid intro teasers start without motion while the body clips and titles keep their curves', () => {
+  const motion = { scale: keyRows([0, 1], [2, 1.2]) };
+  const edit = prompt({ texts: [{ text: 'Coffee', start: 1, duration: 2, motion: FADE_IN }] });
+  edit.clips[0] = { ...edit.clips[0], motion };
+  const next = applyRapidIntro(editDocument(edit, media(6)), edit.rapid_intro);
+  const v1Clips = next.clips.filter(clip => clip.track === 'v1');
+  for (const teaser of v1Clips.slice(0, 5)) assert.equal(teaser.motion, undefined);
+  assert.deepEqual(v1Clips[5].motion, motion);
+  const explicit = next.texts.find(title => title.text === 'Coffee');
+  assert.deepEqual(explicit.motion, FADE_IN);
+  assert.equal(explicit.animationOffset, undefined);
+});
+
+test('behind-person titles map request indices (v1, v2, photo), fixed model and shared defaults, and fail by field', () => {
+  const DEFAULT_OCCLUSION = { model: 'people-v1', threshold: 0.5, feather: 1, smoothing: 0.2 };
+  const clips = [{ path: '/ref.mp4', track: 'v2', start: 4 }, v1('a'), v1('b'), { path: '/still.png', track: 'v1', out: 2 }];
+  const sources = [video(3), video(3), video(3), photo];
+  const occluded = title => input(clips, { texts: [title] });
+  const mapped = title => mapTexts(occluded(title), mapClips(occluded(title), sources))[0];
+  const ok = [
+    [{ text: 'a', start: 0, duration: 1, occlusion: { clip: 1 } }, { clipId: 'clip-1', ...DEFAULT_OCCLUSION }],
+    [{ text: 'a', start: 4.5, duration: 1, occlusion: { clip: 0, threshold: 0.9, feather: 0, smoothing: 0.5 } }, { clipId: 'clip-0', model: 'people-v1', threshold: 0.9, feather: 0, smoothing: 0.5 }],
+    [{ text: 'a', start: 6.5, duration: 1, occlusion: { clip: 3, feather: 4 } }, { clipId: 'clip-3', ...DEFAULT_OCCLUSION, feather: 4 }],
+    [{ text: 'a', clip: 2, occlusion: {} }, { clipId: 'clip-2', ...DEFAULT_OCCLUSION }],
+    [{ text: 'a', clip: 2, occlusion: { clip: 2, threshold: 0.1 } }, { clipId: 'clip-2', ...DEFAULT_OCCLUSION, threshold: 0.1 }],
+    [{ text: 'a', clip: 0, timestamp: 'timeline', occlusion: {} }, { clipId: 'clip-0', ...DEFAULT_OCCLUSION }],
+  ];
+  for (const [request, expected] of ok) {
+    assert.doesNotThrow(() => validateEdit(occluded(request)), JSON.stringify(request));
+    const title = mapped(request);
+    assert.deepEqual(title.occlusion, expected, JSON.stringify(request));
+    assert.equal(Object.hasOwn(title, 'animationOffset'), false);
+  }
+  assert.equal(mapped({ text: 'a', clip: 0 }).timing.clipId, 'clip-0', 'a title may now bind to a v2 clip');
+  assert.equal(Object.hasOwn(mapped({ text: 'plain', start: 0, duration: 1 }), 'occlusion'), false);
+  const canonical = mapClips(occluded(ok[0][0]), sources);
+  assert.deepEqual(canonical.map(clip => clip.id), ['clip-1', 'clip-2', 'clip-3', 'clip-0'], 'owners are request indices, not canonical positions');
+  const bad = [
+    ['person', 'texts.0.occlusion'], [null, 'texts.0.occlusion'], [[], 'texts.0.occlusion'], [{ clip: 1, model: 'people-v1' }, 'texts.0.occlusion'], [{ clip: 1, mode: 'person' }, 'texts.0.occlusion'], [{ clip: 1, animationOffset: 1 }, 'texts.0.occlusion'],
+    [{}, 'texts.0.occlusion.clip'], [{ clip: -1 }, 'texts.0.occlusion.clip'], [{ clip: 4 }, 'texts.0.occlusion.clip'], [{ clip: 0.5 }, 'texts.0.occlusion.clip'], [{ clip: '1' }, 'texts.0.occlusion.clip'],
+    [{ clip: 1, threshold: 0.09 }, 'texts.0.occlusion.threshold'], [{ clip: 1, threshold: 0.91 }, 'texts.0.occlusion.threshold'], [{ clip: 1, threshold: '0.5' }, 'texts.0.occlusion.threshold'],
+    [{ clip: 1, feather: -0.1 }, 'texts.0.occlusion.feather'], [{ clip: 1, feather: 4.1 }, 'texts.0.occlusion.feather'], [{ clip: 1, feather: NaN }, 'texts.0.occlusion.feather'],
+    [{ clip: 1, smoothing: -0.1 }, 'texts.0.occlusion.smoothing'], [{ clip: 1, smoothing: 0.51 }, 'texts.0.occlusion.smoothing'],
+  ];
+  for (const [occlusion, name] of bad) assert.throws(() => validateEdit(occluded({ text: 'a', start: 0, duration: 1, occlusion })), field(name), JSON.stringify(occlusion));
+  for (const occlusion of [{ clip: 1 }, { clip: 0 }]) assert.throws(() => validateEdit(occluded({ text: 'a', clip: 2, occlusion })), field('texts.0.occlusion.clip'), 'a bound title keeps its own clip');
+  assert.throws(() => validateEdit(occluded({ text: 'a', clip: 2, occlusion: { threshold: 2 } })), field('texts.0.occlusion.threshold'));
+  assert.throws(() => validateEdit(input([v1('a')], { texts: [{ text: 'ok', clip: 0 }, { text: 'b', start: 0, duration: 1, occlusion: { feather: 9, clip: 0 } }] })), field('texts.1.occlusion.feather'));
+  // An explicit title that never shares time with its owner is refused once the media timeline is known.
+  const apart = (start, clip) => { const edit = occluded({ text: 'a', start, duration: 1, occlusion: { clip } }); return () => mapTexts(edit, mapClips(edit, sources)); };
+  assert.throws(apart(0, 2), field('texts.0.occlusion.clip'), 'b plays from 3 s');
+  assert.throws(apart(7.5, 0), field('texts.0.occlusion.clip'), 'the v2 clip ends at 7 s');
+  assert.doesNotThrow(apart(2.5, 2));
+  assert.doesNotThrow(apart(6.5, 0));
+});
+
+test('person owners follow the shared reducer through the rapid intro and shift only absolute times', () => {
+  const edit = prompt({ texts: [{ text: 'Behind', start: 2.5, duration: 2, occlusion: { clip: 5 } }, { text: 'Bound', clip: 2, occlusion: {} }, { text: 'On ref', clip: 5 }] });
+  assert.doesNotThrow(() => validateEdit(edit));
+  const state = editDocument(edit, media(6));
+  const next = applyRapidIntro(state, edit.rapid_intro);
+  const [behind, bound, onReference] = next.texts.filter(title => ['Behind', 'Bound', 'On ref'].includes(title.text));
+  assert.equal(behind.occlusion.clipId, 'clip-5');
+  assert.ok(Math.abs(behind.timing.start - (2.5 + 25 / 30)) < 1e-9, 'the explicit title moves with the intro');
+  assert.deepEqual([bound.timing.clipId, bound.occlusion.clipId], ['clip-2', 'clip-2']);
+  assert.equal(onReference.timing.clipId, 'clip-5');
+  assert.equal(next.clips.some(clip => clip.id === 'clip-5' && clip.track === 'v2'), true);
 });

@@ -1,7 +1,7 @@
 // generated from the Modisign monorepo, do not edit
 import { type ClipSpatial, type Place, DEFAULT_CLIP_SETTINGS, STUDIO_TIME_TOLERANCE, type PunchIn, type ClipSettings } from "@/lib/studio-project";
 
-type Size = { width: number; height: number };
+export type Size = { width: number; height: number };
 export type ClipRect = { x: number; y: number; width: number; height: number };
 
 export function photoSettingsAtTime(settings: ClipSettings = DEFAULT_CLIP_SETTINGS, time: number, duration: number): ClipSettings {
@@ -49,6 +49,10 @@ export function placeRect(place: Place, output: Size): ClipRect {
   }
   return { x: box.x * output.width, y: box.y * output.height, width: box.width * output.width, height: box.height * output.height };
 }
+export function clipPivot(clip: { place: Place }, output: Size) {
+  const box = placeRect(clip.place, output);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
 export function clipGeometry(source: Size, output: Size, settings: ClipSettings | undefined, zoomFit: boolean, punchIn: PunchInTiming | undefined, spatial: ClipSpatial) {
   if (settings === undefined) settings = DEFAULT_CLIP_SETTINGS;
   const box = placeRect(spatial.place, output);
@@ -77,19 +81,38 @@ export function clipGeometry(source: Size, output: Size, settings: ClipSettings 
   };
 }
 
-export function drawClip(context: CanvasRenderingContext2D, source: Size, output: Size,
-  settings: ClipSettings | undefined, draw: (rect: ClipRect, source: ClipRect) => void, spatial: ClipSpatial, photo?: { time: number; duration: number }, punchIn?: PunchInTiming) {
-  const geometry = photo === undefined ? clipGeometry(source, output, settings, false, punchIn, spatial)
+// The footage's frame in output pixels for one pass: Fill or Fit, photo slow zoom and punch-ins all resolved. `picture` is the foreground (maps `source`, the retained oriented source rect, onto itself); `backdrop` is the Fit cover.
+export function frameGeometry(source: Size, output: Size, settings: ClipSettings | undefined, spatial: ClipSpatial, photo?: { time: number; duration: number }, punchIn?: PunchInTiming) {
+  return photo === undefined ? clipGeometry(source, output, settings, false, punchIn, spatial)
     : clipGeometry(source, output, photoSettingsAtTime(settings, photo.time, photo.duration), true, punchIn, spatial);
+}
+
+function clipToBox(context: CanvasRenderingContext2D, box: ClipRect) {
   context.save();
   context.beginPath();
-  context.rect(geometry.box.x, geometry.box.y, geometry.box.width, geometry.box.height);
+  context.rect(box.x, box.y, box.width, box.height);
   context.clip();
+}
+
+// `rasterScale` is the context's pixels per output pixel (below 1 for a display-sized preview raster): canvas filter lengths ignore the transform, so the Fit blur is scaled here.
+export function drawClip(context: CanvasRenderingContext2D, source: Size, output: Size,
+  settings: ClipSettings | undefined, draw: (rect: ClipRect, source: ClipRect) => void, spatial: ClipSpatial, photo?: { time: number; duration: number }, punchIn?: PunchInTiming, rasterScale = 1) {
+  const geometry = frameGeometry(source, output, settings, spatial, photo, punchIn);
+  clipToBox(context, geometry.box);
   if (geometry.backdrop !== null) {
-    context.filter = `blur(${Math.max(geometry.box.width, geometry.box.height) * 0.015}px) brightness(60%)`;
+    context.filter = `blur(${Math.max(geometry.box.width, geometry.box.height) * 0.015 * rasterScale}px) brightness(60%)`;
     draw(geometry.backdrop, geometry.source);
     context.filter = "none";
   }
+  draw(geometry.picture, geometry.source);
+  context.restore();
+}
+
+// Only the foreground picture of `drawClip`, never the Fit backdrop: what a person mask follows.
+export function drawClipForeground(context: CanvasRenderingContext2D, source: Size, output: Size,
+  settings: ClipSettings | undefined, draw: (rect: ClipRect, source: ClipRect) => void, spatial: ClipSpatial, photo?: { time: number; duration: number }, punchIn?: PunchInTiming) {
+  const geometry = frameGeometry(source, output, settings, spatial, photo, punchIn);
+  clipToBox(context, geometry.box);
   draw(geometry.picture, geometry.source);
   context.restore();
 }

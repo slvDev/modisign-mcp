@@ -7,15 +7,22 @@ import { destination, inputFile, publishFile } from "./files.js";
 import { bundle, configurationUrl, resolveConfiguration } from "./overlays.js";
 import { pictureSize } from "./own-video.js";
 import { probe, type Artifact, type Update } from "./render.js";
-import { validateEdit, mapClips, mapTexts, applyRapidIntro, checkRapidIntroStructure, selectorsCustomized, type EditInput, type MediaInfo } from "./studio-request.js";
-import { assetRoutes, studioBrowser } from "./studio-browser.js";
+import { validateEdit, mapClips, mapTexts, mapSfx, applyRapidIntro, checkRapidIntroStructure, selectorsCustomized, type EditInput, type MediaInfo } from "./studio-request.js";
+import { assetRoutes, personRoutes, studioBrowser } from "./studio-browser.js";
 import { speechModel } from "./studio-model.js";
 import { timelineDuration } from "../vendor/web/src/lib/video-timeline.js";
-import { initialStudioState } from "../vendor/web/src/lib/studio-state.js";
+import { initialStudioState, type StudioOverlay } from "../vendor/web/src/lib/studio-state.js";
+import { motionIsIdentity } from "../vendor/web/src/lib/studio-project.js";
+import { titleEffectsOn } from "../vendor/web/src/lib/studio-text.js";
 
 export type StudioInput = EditInput & { kind: "studio" };
-const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration), captionStyle: input.captions === undefined ? null : input.captions.style,
-  captionCustomized: input.captions !== undefined && input.captions.word_styles !== undefined && selectorsCustomized(input.captions.word_styles) });
+const PERSON_STATES = { model: "preparing_people_model", masks: "preparing_people_masks" } as const;
+// Only fixed ids and booleans leave the machine: curves, times, text and paths never do.
+const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration),
+  overlayMotionCustomized: input.overlays !== undefined && input.overlays.some((overlay) => !motionIsIdentity(overlay.motion)),
+  captionStyle: input.captions === undefined ? null : input.captions.style,
+  captionCustomized: input.captions !== undefined && input.captions.word_styles !== undefined && selectorsCustomized(input.captions.word_styles),
+  titleEffects: input.texts !== undefined && titleEffectsOn(input.texts) });
 async function authorizeStudio(input: EditInput, signal?: AbortSignal) {
   const body = authorizationBody(input);
   const key = `free-studio-authorization:${JSON.stringify(body)}`;
@@ -57,10 +64,13 @@ export async function validateStudio(input: StudioInput, signal?: AbortSignal) {
     if (normalized.remove_silences === undefined) applyRapidIntro({ ...initialStudioState, aspect: normalized.aspect, clips, texts }, intro);
     else checkRapidIntroStructure(intro, clips);
   }
-  for (const overlay of overlays) {
+  const staged: StudioOverlay[] = [];
+  for (const [index, overlay] of overlays.entries()) {
     const config = await resolveConfiguration(overlay.configuration, signal === undefined ? new AbortController().signal : signal);
+    staged.push({ ...config.studio, id: `overlay-${index}`, start: overlay.start, clamped: false });
     if (overlay.start > Math.max(0, total - config.render.duration)) throw new ToolError("Overlay start must fit within the sequence.", { field: "overlays.start", allowed: { min: 0, max: Math.max(0, total - config.render.duration) } });
   }
+  mapSfx(normalized, { clips, texts, overlays: staged });
   signal?.throwIfAborted();
   return { input: { ...normalized, kind: "studio" as const }, tier, media };
 }
@@ -72,7 +82,7 @@ async function runStudioPage(edit: EditInput, media: Awaited<ReturnType<typeof l
     const directory = await bundle(config.render.compositionUrl, signal);
     routes.set(`/overlays/${index}/index.html`, join(directory, "index.html"));
     for (const name of await readdir(join(directory, "assets"))) routes.set(`/overlays/${index}/assets/${encodeURIComponent(name)}`, join(directory, "assets", name));
-    overlays.push({ src: `/overlays/${index}/index.html`, overlay: { ...config.studio, id: `overlay-${index}`, start: overlay.start, clamped: false } });
+    overlays.push({ src: `/overlays/${index}/index.html`, overlay: { ...config.studio, id: `overlay-${index}`, start: overlay.start, clamped: false, ...(overlay.motion === undefined ? {} : { motion: overlay.motion }) } });
   }
   const sources = media.map((item, index) => {
     const url = `/media/${index}`;
@@ -80,9 +90,14 @@ async function runStudioPage(edit: EditInput, media: Awaited<ReturnType<typeof l
     return { url, name: basename(item.path), type: item.type, kind: item.info.kind };
   });
   if (edit.captions !== undefined || transcriptOnly) for (const [route, path] of await speechModel(signal)) routes.set(route, path);
+  if (edit.texts !== undefined && edit.texts.some((title) => title.occlusion !== undefined)) for (const [route, path] of personRoutes()) routes.set(route, path);
   const browser = await studioBrowser(routes, signal, update);
+  // The person stages replace "rendering" in job_status while the people model loads or masks are made.
+  let stage: typeof PERSON_STATES[keyof typeof PERSON_STATES] | null = null;
+  let fraction = 0.1;
   try {
-    await browser.page.exposeFunction("studioProgress", (fraction: number) => update("rendering", fraction));
+    await browser.page.exposeFunction("studioProgress", (value: number) => { fraction = value; update(stage ?? "rendering", value); });
+    await browser.page.exposeFunction("studioStage", (next: keyof typeof PERSON_STATES | null) => { stage = next === null ? null : PERSON_STATES[next]; update(stage ?? "rendering", fraction); });
     await browser.page.exposeFunction("studioWrite", async (base64: string) => {
       signal.throwIfAborted();
       if (output === undefined) throw new Error("Transcript has no output file");

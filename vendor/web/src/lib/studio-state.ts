@@ -1,11 +1,11 @@
 // generated from the Modisign monorepo, do not edit
-import { projectSpatial, projectTrack, defaultSpatial, isCrop, isPlace, validTrackSchedule, MAX_STUDIO_PROJECT_BYTES, MAX_STUDIO_CLIPS, MAX_STUDIO_TEXTS, type ClipSpatial, type TrackPlacement, clampTransition, type ClipTransition, STUDIO_ASPECTS, MAX_STUDIO_DURATION, MIN_CLIP_DURATION, MIN_CLIP_LABEL, STUDIO_TIME_TOLERANCE, isPhotoDuration, MIN_PHOTO_DURATION, isValidTrim, DEFAULT_CLIP_SETTINGS, isPunchIns, type PunchIn, type ClipSettings, type StudioProject } from "@/lib/studio-project";
+import { projectSpatial, projectTrack, defaultSpatial, isCrop, isPlace, validTrackSchedule, MAX_STUDIO_PROJECT_BYTES, MAX_STUDIO_CLIPS, MAX_STUDIO_TEXTS, type ClipSpatial, type TrackPlacement, clampTransition, type ClipTransition, STUDIO_ASPECTS, MAX_STUDIO_DURATION, MIN_CLIP_DURATION, MIN_CLIP_LABEL, STUDIO_TIME_TOLERANCE, isPhotoDuration, MIN_PHOTO_DURATION, isValidTrim, DEFAULT_CLIP_SETTINGS, isPunchIns, type PunchIn, type ClipSettings, type StudioProject, type LayerMotion, motionIsIdentity, motionProblem, motionKeyCount, MOTION_TIME, PHOTO_MOTION_TIME, MAX_MOTION_KEYS } from "@/lib/studio-project";
 import type { Aspect } from "@/lib/aspects";
 import type { CatalogItem } from "@/lib/catalog-query";
 import { editorHref } from "@/lib/hrefs";
 import { configOptions, parseTemplateConfig, sameTemplate, type ConfigFamily, type TemplateConfig } from "@/lib/template-config";
 import type { FamilyId } from "@/lib/family-ids";
-import type { Look } from "@/lib/values";
+import type { Cue, Look } from "@/lib/values";
 import type { OwnVideo } from "@/lib/own-video";
 import { closestVideoAspect } from "@/lib/video-placement";
 import { clipGeometry, clipSourceStart } from "@/lib/clip-settings";
@@ -16,8 +16,11 @@ import type { ClipSilence } from "@/lib/studio-silences";
 
 import { timelineWords, replaceCaptionWords, type CaptionWord, type CaptionSettings, type CaptionStyleId, type CaptionPlacement, type WordStyles } from "@/lib/captions";
 import { patchedLook, type CaptionMix, type WordAppearance, type WordPatch } from "@/lib/caption-mix";
-import { textProblem, type StudioText, type TextPatch } from "@/lib/studio-text";
+import { occlusionOverlaps, textProblem, type StudioText, type TextPatch } from "@/lib/studio-text";
 import { rapidIntro, type RapidIntroInput } from "@/lib/studio-rapid-intro";
+import { documentSfx, movedSfx, projectSfx, retargetedSfx, settledSfx, sfxProblem, type StudioSfx, type SfxPatch } from "@/lib/studio-sfx";
+import { AUTO_SFX_STALE, appliedAutoSfx, autoSfxRevision, type AutoSfxAction } from "@/lib/studio-sfx-auto";
+import { MAX_STUDIO_SFX } from "@/lib/studio-project";
 
 export const STUDIO_FORMATS = [...STUDIO_ASPECTS];
 export { MAX_STUDIO_DURATION, MIN_CLIP_DURATION } from "@/lib/studio-project";
@@ -26,21 +29,26 @@ export const OVERLAY_DRAG = "application/x-modisign-overlay";
 import type { OwnPhoto } from "@/lib/studio-photo";
 
 export type StudioMedia = ({ kind: "video"; source: OwnVideo } | { kind: "photo"; source: OwnPhoto }) & { id: string; poster: string; hasAudio: boolean };
-export type StudioClip = ClipSpatial & TrackPlacement & { id: string; mediaId: string | null; label: string; kind: "video" | "photo"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; sourceStart?: number; punchIns?: PunchIn[]; transition?: ClipTransition & { to: string } };
-export type StudioFamily = ConfigFamily & { id: FamilyId; name: string; looks: Look[]; freeConfigs: TemplateConfig[] };
+export type StudioClip = ClipSpatial & TrackPlacement & { id: string; mediaId: string | null; label: string; kind: "video" | "photo"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; sourceStart?: number; punchIns?: PunchIn[]; transition?: ClipTransition & { to: string }; motion?: LayerMotion };
+export type StudioFamily = ConfigFamily & { id: FamilyId; name: string; cues: Cue[]; looks: Look[]; freeConfigs: TemplateConfig[] };
 // MCP builds its overlay preset without the library tile, which only the Studio picker draws.
-export type StudioOverlay = { id: string; preset: Omit<CatalogItem, "studioStill">; family: StudioFamily; config: TemplateConfig; start: number; clamped: boolean };
-export function overlayIsFree(overlay: StudioOverlay) {
+export type StudioOverlay = { id: string; preset: Omit<CatalogItem, "studioStill">; family: StudioFamily; config: TemplateConfig; start: number; clamped: boolean; motion?: LayerMotion };
+// The template configuration alone matches a free preset.
+export function overlayTemplateIsFree(overlay: StudioOverlay) {
   return overlay.family.freeConfigs.some((config) => sameTemplate(overlay.family.variables, overlay.config, config));
+}
+// A placed overlay is free only with an unchanged free template and no nonidentity motion key, active or not.
+export function overlayIsFree(overlay: StudioOverlay) {
+  return overlayTemplateIsFree(overlay) && motionIsIdentity(overlay.motion);
 }
 export function overlayConfig(family: StudioFamily, href: string) {
   const config = parseTemplateConfig(family, family.looks, [...new URLSearchParams(href.slice(href.indexOf("?") + 1))]);
   if (config === undefined) throw new Error("Overlay configuration is invalid");
   return config;
 }
-export type StudioSelection = { kind: "clip"; id: string; ids: string[] } | { kind: "overlay"; id: string } | { kind: "text"; id: string } | null;
+export type StudioSelection = { kind: "clip"; id: string; ids: string[] } | { kind: "overlay"; id: string } | { kind: "text"; id: string } | { kind: "sfx"; id: string } | null;
 export type StudioDocument = {
-  media: StudioMedia[]; clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[];
+  media: StudioMedia[]; clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[]; sfx: StudioSfx[];
   transcripts: Record<string, CaptionWord[]>; wordStyles: WordStyles; captions: CaptionSettings | null; savedCaptionSettings: CaptionSettings | null;
   aspect: Aspect; aspectChosen: boolean; selection: StudioSelection;
 };
@@ -52,7 +60,7 @@ export type StudioState = StudioDocument & {
 };
 export const initialStudioState: StudioState = {
   projectName: "Untitled edit",
-  media: [], clips: [], overlays: [], texts: [], transcripts: {}, wordStyles: {}, captions: null, savedCaptionSettings: null, aspect: "9x16", aspectChosen: false,
+  media: [], clips: [], overlays: [], texts: [], sfx: [], transcripts: {}, wordStyles: {}, captions: null, savedCaptionSettings: null, aspect: "9x16", aspectChosen: false,
   selection: null, playhead: 0, seek: 0, playing: false, message: null,
   snapping: true, past: [], future: [], editGroup: null, editFuture: null,
 };
@@ -69,7 +77,7 @@ export type StudioAction =
   | { type: "set-caption-size"; size: CaptionPlacement["size"] }
   | { type: "clear-captions" }
   | { type: "import"; media: StudioMedia }
-  | { type: "open-project"; document: Pick<StudioState, "clips" | "overlays" | "texts" | "aspect" | "savedCaptionSettings" | "projectName"> }
+  | { type: "open-project"; document: Pick<StudioState, "clips" | "overlays" | "texts" | "sfx" | "aspect" | "savedCaptionSettings" | "projectName"> }
   | { type: "relink-clip"; id: string; mediaId: string }
   | { type: "remove-media"; id: string }
   | { type: "add-clip"; id: string; mediaId: string; target: { track: "v1"; index?: number } | { track: "v2"; start: number } }
@@ -82,6 +90,7 @@ export type StudioAction =
   | { type: "move-clip"; id: string; index: number }
   | { type: "edit-clip"; id: string; settings: ClipSettings; group?: string }
   | { type: "edit-punch-ins"; id: string; punchIns: PunchIn[]; group?: string }
+  | { type: "edit-motion"; target: { kind: "clip" | "overlay" | "text"; id: string }; motion: LayerMotion | undefined; group?: string }
   | { type: "end-clip-edit" }
   | { type: "set-transition"; id: string; transition: ClipTransition | null; group?: string }
   | { type: "trim-clip"; id: string; inPoint: number; outPoint: number; start?: number }
@@ -99,6 +108,10 @@ export type StudioAction =
   | { type: "add-text"; text: StudioText }
   | { type: "edit-text"; id: string; patch: TextPatch; group?: string }
   | { type: "remove-text"; id: string }
+  | { type: "add-sfx"; sfx: StudioSfx }
+  | { type: "edit-sfx"; id: string; patch: SfxPatch; group?: string }
+  | { type: "remove-sfx"; id: string }
+  | AutoSfxAction
   | ({ type: "rapid-intro" } & RapidIntroInput)
   | { type: "set-aspect"; aspect: Aspect }
   | { type: "select"; selection: StudioSelection }
@@ -109,7 +122,10 @@ export type StudioAction =
   | { type: "ended" }
   | { type: "message"; message: string | null };
 
-function required<T extends { id: string }>(items: T[], id: string) {
+function without<T extends object>(item: T, ...keys: string[]): T {
+  return Object.fromEntries(Object.entries(item).filter(([key]) => !keys.includes(key))) as T;
+}
+export function required<T extends { id: string }>(items: readonly T[], id: string) {
   const item = items.find((item) => item.id === id);
   if (item === undefined) throw new Error("Timeline item is missing");
   return item;
@@ -133,18 +149,58 @@ function keptTexts(texts: StudioText[], clips: StudioClip[], total: number, clam
   const kept = texts.flatMap((title): StudioText[] => {
     const { timing } = title;
     if ("clipId" in timing) return clips.some((clip) => clip.id === timing.clipId) ? [title] : [];
+    if (title.occlusion !== undefined && !clips.some((clip) => clip.id === title.occlusion!.clipId)) return [];
     const start = clamp ? overlayStart(timing.start, total, timing.duration) : timing.start;
     return start === timing.start ? [title] : [{ ...title, timing: { ...timing, start } }];
   });
   return kept.length === texts.length && kept.every((title, index) => title === texts[index]) ? texts : kept;
 }
-// A clip split into fragments gives each fragment its own copy of the bound titles.
-function fragmentTitles(texts: StudioText[], clips: StudioClip[], owners: Map<string, string>): StudioText[] {
+// A bound title keeps its animation phase when its clip's source start moves: the title-local keys and reveal then sit that much later in the title.
+function phased(title: StudioText, delta: number): StudioText {
+  if ((title.motion === undefined && title.reveal === undefined) || Math.abs(delta) < STUDIO_TIME_TOLERANCE) return title;
+  const { animationOffset, ...rest } = title;
+  const offset = (animationOffset ?? 0) + delta;
+  return Math.abs(offset) < STUDIO_TIME_TOLERANCE ? rest : { ...rest, animationOffset: offset };
+}
+// The footage edit is judged on the original state; a title's phase only moves once it is accepted.
+function trimmed(state: StudioState, clips: StudioClip[], id: string, delta: number): StudioState {
+  const next = edited(state, clips, true);
+  return next.clips === state.clips ? next : { ...next, texts: shiftedPhases(next.texts, id, delta) };
+}
+function shiftedPhases(texts: StudioText[], clipId: string, delta: number): StudioText[] {
+  const shifted = texts.map((title) => "clipId" in title.timing && title.timing.clipId === clipId ? phased(title, delta) : title);
+  return shifted.every((title, index) => title === texts[index]) ? texts : shifted;
+}
+// A clip split into fragments gives each fragment its own copy of the bound titles, each at the phase of its own source start.
+function fragmentTitles(texts: StudioText[], clips: StudioClip[], owners: Map<string, string>, previous: StudioClip[]): StudioText[] {
   return texts.flatMap((title) => {
-    const { timing } = title;
-    if (!("clipId" in timing)) return [title];
-    return clips.filter((clip) => owners.get(clip.id) === timing.clipId).map((clip) => clip.id === timing.clipId ? title : { ...title, id: `${clip.id}/${title.id}`, timing: { clipId: clip.id } });
+    const { timing, occlusion } = title;
+    if (!("clipId" in timing)) {
+      // An explicit person title keeps its own timing against each surviving fragment of its owner and draws only where that fragment is on screen.
+      return occlusion === undefined ? [title] : clips.filter((clip) => owners.get(clip.id) === occlusion.clipId).map((clip) => clip.id === occlusion.clipId ? title : { ...title, id: `${clip.id}/${title.id}`, occlusion: { ...occlusion, clipId: clip.id } });
+    }
+    const original = required(previous, timing.clipId);
+    return clips.filter((clip) => owners.get(clip.id) === timing.clipId).map((clip) => phased(clip.id === timing.clipId ? title : { ...title, id: `${clip.id}/${title.id}`, timing: { clipId: clip.id }, ...(occlusion === undefined ? {} : { occlusion: { ...occlusion, clipId: clip.id } }) }, clipSourceStart(clip) - clipSourceStart(original)));
   });
+}
+// A timing edit keeps the animation phase: trimming an explicit title's start advances it, a new owner restarts it, a detached title keeps it.
+function retimed(title: StudioText, updated: StudioText): StudioText {
+  const before = title.timing;
+  const after = updated.timing;
+  if ((updated.motion === undefined && updated.reveal === undefined) || before === after) return updated;
+  if ("clipId" in after) {
+    if ("clipId" in before && before.clipId === after.clipId) return updated;
+    return without(updated, "animationOffset");
+  }
+  if ("clipId" in before) return updated;
+  const moved = after.start - before.start;
+  return Math.abs(moved) > STUDIO_TIME_TOLERANCE && Math.abs(after.start + after.duration - before.start - before.duration) < STUDIO_TIME_TOLERANCE ? phased(updated, moved) : updated;
+}
+// Off is an absent key, a phase offset needs a motion or a reveal to shift, and a bound person title stands in front of its own clip.
+function settledTitle(title: StudioText): StudioText {
+  const present = Object.fromEntries(Object.entries(title).filter(([, value]) => value !== undefined)) as StudioText;
+  const owned = present.occlusion !== undefined && "clipId" in present.timing && present.occlusion.clipId !== present.timing.clipId ? { ...present, occlusion: { ...present.occlusion, clipId: present.timing.clipId } } : present;
+  return owned.motion === undefined && owned.reveal === undefined ? without(owned, "animationOffset") : owned;
 }
 function movedTitles(texts: StudioText[], move: (start: number) => number): StudioText[] {
   return texts.map((title) => "clipId" in title.timing ? title : { ...title, timing: { ...title.timing, start: move(title.timing.start) } });
@@ -197,7 +253,8 @@ function synchronizedRemoval(state: StudioState, ranges: ClipSilence[]): StudioS
     const next = edited(state, result.clips);
     if (next.clips === state.clips) return next;
     return edited({ ...next, overlays: state.overlays.map((overlay) => ({ ...overlay, start: result.warp(overlay.start) })),
-      texts: movedTitles(fragmentTitles(state.texts, next.clips, result.owners), result.warp) }, next.clips, true);
+      texts: movedTitles(fragmentTitles(state.texts, next.clips, result.owners, state.clips), result.warp),
+      sfx: retargetedSfx(movedSfx(state.sfx, result.warp), next.clips, result.owners) }, next.clips, true);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     return { ...state, message: error.message };
@@ -267,7 +324,8 @@ function removeSilences(state: StudioState, ranges: ClipSilence[]): StudioState 
   };
   const total = studioDuration(next.clips);
   return { ...next, overlays: state.overlays.map((overlay) => ({ ...overlay, start: move(overlay.start) })),
-    texts: keptTexts(movedTitles(fragmentTitles(state.texts, next.clips, owners), move), next.clips, total, true) };
+    texts: keptTexts(movedTitles(fragmentTitles(state.texts, next.clips, owners, state.clips), move), next.clips, total, true),
+    sfx: retargetedSfx(movedSfx(state.sfx, move), next.clips, owners) };
 }
 function captionSettings(settings: CaptionSettings, patch: Partial<CaptionSettings>): CaptionSettings {
   const { style, position, size } = { ...settings, ...patch };
@@ -420,6 +478,21 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
       if (JSON.stringify(clip.punchIns) === JSON.stringify(action.punchIns)) return state;
       return edited(state, state.clips.map((item) => item.id === action.id ? { ...item, punchIns: action.punchIns } : item));
     }
+    case "edit-motion": {
+      const { kind, id } = action.target;
+      const layer = required<{ id: string; motion?: LayerMotion }>(kind === "clip" ? state.clips : kind === "overlay" ? state.overlays : state.texts, id);
+      const problem = action.motion === undefined ? null : motionProblem(action.motion, kind === "clip" && required(state.clips, id).kind === "photo" ? PHOTO_MOTION_TIME : MOTION_TIME);
+      if (problem !== null) return { ...state, message: problem };
+      if (JSON.stringify(layer.motion) === JSON.stringify(action.motion)) return state;
+      // A title's phase offset only exists together with its motion or reveal.
+      const withMotion = <T extends { id: string; motion?: LayerMotion; reveal?: unknown; animationOffset?: number }>(items: T[]) => items.map((item): T => {
+        if (item.id !== id) return item;
+        if (action.motion !== undefined) return { ...item, motion: action.motion };
+        return item.reveal === undefined ? without(item, "motion", "animationOffset") : without(item, "motion");
+      });
+      if (kind === "clip") return edited(state, withMotion(state.clips));
+      return { ...state, message: null, ...(kind === "overlay" ? { overlays: withMotion(state.overlays) } : { texts: withMotion(state.texts) }) };
+    }
     case "end-clip-edit": return { ...state, editGroup: null, editFuture: null };
     case "trim-clip": {
       const clip = required(state.clips, action.id);
@@ -430,12 +503,12 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
       if (clip.kind === "photo") {
         const duration = action.outPoint - action.inPoint;
         if (!isPhotoDuration(duration)) return { ...state, message: `Keep photos between ${MIN_CLIP_LABEL} and 30 seconds.` };
-        return edited(state, state.clips.map((item) => item.id === clip.id ? { ...clip, ...placement, duration, inPoint: 0, outPoint: duration, sourceStart: clipSourceStart(clip) + action.inPoint } : item), true);
+        return trimmed(state, state.clips.map((item) => item.id === clip.id ? { ...clip, ...placement, duration, inPoint: 0, outPoint: duration, sourceStart: clipSourceStart(clip) + action.inPoint } : item), clip.id, action.inPoint - clip.inPoint);
       }
       if (!isValidTrim(clip.duration, action.inPoint, action.outPoint)) {
         return { ...state, message: `Keep at least ${MIN_CLIP_LABEL} within the source clip.` };
       }
-      return edited(state, state.clips.map((clip) => clip.id === action.id ? { ...clip, ...placement, inPoint: action.inPoint, outPoint: action.outPoint } : clip), true);
+      return trimmed(state, state.clips.map((item) => item.id === action.id ? { ...item, ...placement, inPoint: action.inPoint, outPoint: action.outPoint } : item), clip.id, action.inPoint - clip.inPoint);
     }
     case "split-clip": {
       const clip = required(state.clips, action.id);
@@ -456,7 +529,8 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
         : [{ ...clip, punchIns: leftPunchIns, transition: undefined, outPoint: cut }, { ...clip, ...rightPlacement, punchIns: rightPunchIns, id: action.newId, inPoint: cut }]));
       const next = edited(state, clips, true);
       if (next.clips === state.clips) return next;
-      return { ...next, texts: fragmentTitles(next.texts, next.clips, new Map(next.clips.map((item) => [item.id, item.id === action.newId ? action.id : item.id]))) };
+      const owners = new Map(next.clips.map((item) => [item.id, item.id === action.newId ? action.id : item.id]));
+      return { ...next, texts: fragmentTitles(next.texts, next.clips, owners, state.clips), sfx: retargetedSfx(next.sfx, next.clips, owners) };
     }
     case "toggle-snap": return { ...state, snapping: !state.snapping };
     case "set-playing": return state.clips.length === 0 || state.clips.some((clip) => clip.mediaId === null) ? state : { ...state, playing: action.playing, seek: state.playhead };
@@ -471,18 +545,46 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
     }
     case "edit-text": {
       const title = required(state.texts, action.id);
-      const updated: StudioText = { ...title, ...action.patch };
+      const updated = settledTitle(retimed(title, { ...title, ...action.patch }));
       if (JSON.stringify(updated) === JSON.stringify(title)) return state;
-      const problem = textProblem(updated, state.clips, studioDuration(state.clips));
+      const problem = textProblem(updated, state.clips, studioDuration(state.clips))
+        ?? (action.patch.occlusion !== undefined && !occlusionOverlaps(updated, state.clips) ? "That title does not overlap its person clip. Move the title or choose another clip." : null);
       return problem === null ? { ...state, message: null, texts: state.texts.map((item) => item.id === action.id ? updated : item) } : { ...state, message: problem };
     }
     case "remove-text": return edited({ ...state, selection: null, texts: state.texts.filter((title) => title.id !== action.id) });
+    case "add-sfx": {
+      if (state.sfx.some((sound) => sound.id === action.sfx.id)) throw new Error("A sound with this id already exists");
+      const problem = sfxProblem(action.sfx, state);
+      return problem === null ? { ...state, selection: { kind: "sfx", id: action.sfx.id }, sfx: [...state.sfx, action.sfx], message: null } : { ...state, message: problem };
+    }
+    case "edit-sfx": {
+      const sound = required(state.sfx, action.id);
+      const { auto, ...rest } = { ...sound, ...action.patch };
+      // Any edit of a managed sound makes it the creator's own, so a later automatic pass leaves it alone.
+      const updated: StudioSfx = "auto" in action.patch ? { ...rest, auto } : rest;
+      if (JSON.stringify(updated) === JSON.stringify(sound)) return state;
+      const problem = sfxProblem(updated, state);
+      return problem === null ? { ...state, message: null, sfx: state.sfx.map((item) => item.id === action.id ? updated : item) } : { ...state, message: problem };
+    }
+    case "remove-sfx": {
+      required(state.sfx, action.id);
+      return { ...state, selection: null, sfx: state.sfx.filter((sound) => sound.id !== action.id) };
+    }
+    case "apply-auto-sfx": {
+      if (action.revision !== autoSfxRevision(state)) return { ...state, message: AUTO_SFX_STALE };
+      const sfx = appliedAutoSfx(state.sfx, action.rows, action.replace);
+      if (sfx === state.sfx) return state;
+      const problem = action.rows.map((row) => sfxProblem(row, state)).find((reason) => reason !== null);
+      if (problem !== undefined) return { ...state, message: problem };
+      const { selection } = state;
+      return { ...state, sfx, message: null, selection: selection !== null && selection.kind === "sfx" && !sfx.some((sound) => sound.id === selection.id) ? null : selection };
+    }
     case "rapid-intro": {
       const built = rapidIntro(state, action);
       if (typeof built === "string") return { ...state, message: built };
       const next = edited(state, built.clips);
       if (next.clips === state.clips) return next;
-      return { ...next, overlays: built.overlays, texts: built.texts, selection: null, playhead: 0, seek: 0 };
+      return { ...next, overlays: built.overlays, texts: built.texts, sfx: built.sfx, selection: null, playhead: 0, seek: 0 };
     }
     case "edit-overlay": {
       const overlay = required(state.overlays, action.id);
@@ -505,9 +607,9 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
     }
     case "seek": {
       const time = clampSeek(state.clips, action.time);
-      return { ...state, playhead: time, seek: time };
+      return state.playhead === time && state.seek === time ? state : { ...state, playhead: time, seek: time };
     }
-    case "time": return { ...state, playhead: action.time };
+    case "time": return state.playhead === action.time ? state : { ...state, playhead: action.time };
     case "toggle-play": {
       if (state.clips.length === 0 || state.clips.some((clip) => clip.mediaId === null)) return state;
       const time = state.playhead >= studioDuration(state.clips) ? 0 : state.playhead;
@@ -518,14 +620,32 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
   }
 }
 function documentOf(state: StudioState): StudioDocument {
-  const { media, clips, overlays, texts, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings } = state;
-  return { media, clips, overlays, texts, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings };
+  const { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings } = state;
+  return { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings };
+}
+// The reason a project cannot be saved as it stands (title, motion key and byte limits), or null.
+export function studioBudgetProblem(state: StudioState) {
+  if (state.texts.length > MAX_STUDIO_TEXTS) return `A project has at most ${MAX_STUDIO_TEXTS} titles.`;
+  if (state.sfx.length > MAX_STUDIO_SFX) return `A project has at most ${MAX_STUDIO_SFX} sounds.`;
+  if ([...state.clips, ...state.overlays, ...state.texts].reduce((sum, layer) => sum + motionKeyCount(layer.motion), 0) > MAX_MOTION_KEYS) return `A project has at most ${MAX_MOTION_KEYS} motion keys.`;
+  return new TextEncoder().encode(JSON.stringify(projectOf(state, state.projectName))).length > MAX_STUDIO_PROJECT_BYTES
+    ? "This project exceeds the 64 KiB save limit. Shorten overlay or title text, remove keyframes or remove clips." : null;
+}
+// Sounds follow their owners: a removed title, transition or overlay cue takes its sounds along, and a manual start beyond a shortened output moves inside it.
+function withSettledSfx(previous: StudioState, applied: StudioState): StudioState {
+  if (applied.clips === previous.clips && applied.overlays === previous.overlays && applied.texts === previous.texts && applied.sfx === previous.sfx) return applied;
+  const { sfx, dropped, moved } = settledSfx(applied);
+  if (dropped === 0 && moved === 0) return applied;
+  const notices = [dropped === 0 ? null : `${dropped} ${dropped === 1 ? "sound was" : "sounds were"} removed with ${dropped === 1 ? "its" : "their"} event.`,
+    moved === 0 ? null : `${moved} ${moved === 1 ? "sound was" : "sounds were"} moved inside the shorter timeline.`];
+  const { selection } = applied;
+  return { ...applied, sfx, selection: selection !== null && selection.kind === "sfx" && !sfx.some((sound) => sound.id === selection.id) ? null : selection,
+    message: [applied.message, ...notices].filter((part) => part !== null).join(" ") };
 }
 export function studioReducer(state: StudioState, action: StudioAction): StudioState {
   function preflight(candidate: StudioState) {
-    if (candidate.texts.length > MAX_STUDIO_TEXTS) return { ...state, message: `A project has at most ${MAX_STUDIO_TEXTS} titles.` };
-    return new TextEncoder().encode(JSON.stringify(projectOf(candidate, candidate.projectName))).length > MAX_STUDIO_PROJECT_BYTES
-      ? { ...state, message: "This project exceeds the 64 KiB save limit. Shorten overlay or title text or remove clips." } : candidate;
+    const problem = studioBudgetProblem(candidate);
+    return problem === null ? candidate : { ...state, message: problem };
   }
   if (action.type === "cancel-clip-edit") {
     const snapshot = state.past.at(-1);
@@ -543,15 +663,21 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
       future: action.type === "redo" ? state.future.slice(0, -1) : [...state.future, documentOf(state)],
     }));
   }
-  const candidate = applyAction(state, action);
+  const candidate = withSettledSfx(state, applyAction(state, action));
   if (action.type === "rename-project") return preflight(candidate);
-  const changed = candidate.media !== state.media || candidate.clips !== state.clips || candidate.overlays !== state.overlays || candidate.texts !== state.texts || candidate.aspect !== state.aspect || candidate.aspectChosen !== state.aspectChosen || candidate.transcripts !== state.transcripts || candidate.wordStyles !== state.wordStyles || candidate.captions !== state.captions || candidate.savedCaptionSettings !== state.savedCaptionSettings;
+  const changed = candidate.media !== state.media || candidate.clips !== state.clips || candidate.overlays !== state.overlays || candidate.texts !== state.texts || candidate.sfx !== state.sfx || candidate.aspect !== state.aspect || candidate.aspectChosen !== state.aspectChosen || candidate.transcripts !== state.transcripts || candidate.wordStyles !== state.wordStyles || candidate.captions !== state.captions || candidate.savedCaptionSettings !== state.savedCaptionSettings;
   if (!changed) return candidate;
   const next = preflight(candidate);
   if (next !== candidate || action.type === "open-project") return next;
-  const group = (action.type === "edit-overlay" || action.type === "edit-text" || action.type === "edit-clip" || action.type === "set-transition" || action.type === "edit-punch-ins" || action.type === "edit-clip-spatial") && action.group !== undefined ? `${action.id}/${action.group}` : null;
+  const group = (action.type === "edit-overlay" || action.type === "edit-text" || action.type === "edit-sfx" || action.type === "edit-clip" || action.type === "set-transition" || action.type === "edit-punch-ins" || action.type === "edit-clip-spatial" || action.type === "edit-motion") && action.group !== undefined
+    ? `${action.type === "edit-motion" ? `motion:${action.target.id}` : action.id}/${action.group}` : null;
   return { ...next, editGroup: group, editFuture: group === null ? null : group === state.editGroup ? state.editFuture : state.future,
     past: group !== null && group === state.editGroup ? state.past : [...state.past.slice(-59), documentOf(state)], future: [] };
+}
+
+// Why applying these rows would be refused on this document (stale review, owners, 100 sounds, 64 KiB), or null; the reducer is the one judge.
+export function autoSfxProblem(state: StudioState, action: AutoSfxAction) {
+  return studioReducer({ ...state, message: null }, action).message;
 }
 
 export function projectOf(state: StudioState, name: string): StudioProject {
@@ -562,31 +688,38 @@ export function projectOf(state: StudioState, name: string): StudioProject {
   return { name, aspect: state.aspect,
     ...(captions === null ? {} : { captions: { style: captions.style, position: captions.position, size: captions.size, ...(captions.mix === undefined ? {} : { mix: captions.mix }) } }),
     ...(transitions.length === 0 ? {} : { transitions }),
-    ...(state.texts.length === 0 ? {} : { texts: state.texts.map(({ text, timestamp, font, weight, italic, fill, size, x, y, backing, timing }) => {
-      const label = { text, ...(timestamp === undefined ? {} : { timestamp }), font, weight, italic, fill, size, x, y, backing };
+    ...(state.sfx.length === 0 ? {} : { sfx: projectSfx(state.sfx, { clips: ordered, texts: state.texts, overlays: state.overlays }) }),
+    ...(state.texts.length === 0 ? {} : { texts: state.texts.map(({ text, timestamp, font, weight, italic, fill, size, x, y, backing, timing, motion, reveal, occlusion, animationOffset }) => {
+      const ownerIndex = (clipId: string) => { const found = ordered.findIndex((item) => item.id === clipId); if (found < 0) throw new Error("A title's person clip is missing"); return found; };
+      const label = { text, ...(timestamp === undefined ? {} : { timestamp }), font, weight, italic, fill, size, x, y, backing, ...(motion === undefined ? {} : { motion }), ...(reveal === undefined ? {} : { reveal }),
+        ...(occlusion === undefined ? {} : { occlusion: { clip: ownerIndex(occlusion.clipId), model: occlusion.model, threshold: occlusion.threshold, feather: occlusion.feather, smoothing: occlusion.smoothing } }), ...(animationOffset === undefined ? {} : { animationOffset }) };
       if (!("clipId" in timing)) return { ...label, start: timing.start, duration: timing.duration };
       const clip = ordered.findIndex((item) => item.id === timing.clipId);
       if (clip < 0) throw new Error("A title's clip is missing");
       return { ...label, clip };
     }) }),
     clips: ordered.map((clip) => {
-      const { label, kind, duration, inPoint, outPoint, settings, punchIns, sourceStart, crop, place } = clip;
+      const { label, kind, duration, inPoint, outPoint, settings, punchIns, sourceStart, crop, place, motion } = clip;
       const structure = {
-        ...(Object.values(crop).every((edge) => edge === 0) ? {} : { crop }), ...(place.mode === "full" ? {} : { place }) };
+        ...(Object.values(crop).every((edge) => edge === 0) ? {} : { crop }), ...(place.mode === "full" ? {} : { place }), ...(motion === undefined ? {} : { motion }) };
       const content = kind === "photo"
       ? { ...structure, label, kind: "photo" as const, duration: outPoint - inPoint, ...(sourceStart === undefined || sourceStart === 0 ? {} : { sourceStart }), ...(punchIns === undefined || punchIns.length === 0 ? {} : { punchIns }), settings: { frameMode: settings.frameMode, centerX: settings.centerX, centerY: settings.centerY, zoom: settings.zoom, slowZoom: settings.slowZoom === true } }
       : { ...structure, label, kind: "video" as const, duration, inPoint, outPoint, settings, ...(punchIns === undefined || punchIns.length === 0 ? {} : { punchIns }) };
       return clip.track === "v2" ? { ...content, track: "v2" as const, start: clip.start } : content; }),
-    overlays: state.overlays.map(({ preset, family, config, start }) => ({ family: preset.family, preset: preset.id, start,
-      configuration: editorHref(family.id, configOptions(family, family.looks, config)) })) };
+    overlays: state.overlays.map(({ preset, family, config, start, motion }) => ({ family: preset.family, preset: preset.id, start,
+      configuration: editorHref(family.id, configOptions(family, family.looks, config)), ...(motion === undefined ? {} : { motion }) })) };
 }
 
-export function documentFromProject(project: StudioProject, presets: CatalogItem[], families: StudioFamily[]): Pick<StudioState, "clips" | "overlays" | "texts" | "aspect" | "savedCaptionSettings" | "projectName"> {
+export function documentFromProject(project: StudioProject, presets: CatalogItem[], families: StudioFamily[]): Pick<StudioState, "clips" | "overlays" | "texts" | "sfx" | "aspect" | "savedCaptionSettings" | "projectName"> {
   const ids = project.clips.map(() => crypto.randomUUID());
+  const textIds = (project.texts === undefined ? [] : project.texts).map(() => crypto.randomUUID());
+  const overlayIds = project.overlays.map(() => crypto.randomUUID());
   let cut = 0;
   return { aspect: project.aspect, projectName: project.name,
-    texts: (project.texts === undefined ? [] : project.texts).map(({ text, timestamp, font, weight, italic, fill, size, x, y, backing, clip, start, duration }): StudioText => ({
-      id: crypto.randomUUID(), text, ...(timestamp === undefined ? {} : { timestamp }), font, weight, italic, fill, size, x, y, backing,
+    sfx: documentSfx(project.sfx === undefined ? [] : project.sfx, { clips: ids, texts: textIds, overlays: overlayIds }),
+    texts: (project.texts === undefined ? [] : project.texts).map(({ text, timestamp, font, weight, italic, fill, size, x, y, backing, clip, start, duration, motion, reveal, occlusion, animationOffset }, index): StudioText => ({
+      id: textIds[index], text, ...(timestamp === undefined ? {} : { timestamp }), font, weight, italic, fill, size, x, y, backing, ...(motion === undefined ? {} : { motion }), ...(reveal === undefined ? {} : { reveal }),
+      ...(occlusion === undefined ? {} : { occlusion: { clipId: ids[occlusion.clip], model: occlusion.model, threshold: occlusion.threshold, feather: occlusion.feather, smoothing: occlusion.smoothing } }), ...(animationOffset === undefined ? {} : { animationOffset }),
       timing: clip === undefined ? { start, duration } : { clipId: ids[clip] } })),
     savedCaptionSettings: project.captions === undefined ? null : project.captions,
     clips: project.clips.map((clip, index) => {
@@ -595,12 +728,12 @@ export function documentFromProject(project: StudioProject, presets: CatalogItem
       const source = clip.kind === "photo" ? { ...clip, inPoint: 0, outPoint: clip.duration } : clip;
       return { ...source, ...projectTrack(clip), ...projectSpatial(clip), settings: clip.kind === "photo" ? { ...DEFAULT_CLIP_SETTINGS, ...clip.settings } : clip.settings, id: ids[index], mediaId: null, transition: transition === undefined ? undefined : { type: transition.type, duration: transition.duration, to: ids[index + 1] } };
     }),
-    overlays: project.overlays.map((overlay) => {
+    overlays: project.overlays.map((overlay, index) => {
       const preset = presets.find((item) => item.family === overlay.family && item.id === overlay.preset);
       if (preset === undefined) throw new Error("Saved overlay is no longer listed");
       const family = families.find((item) => item.id === preset.family);
       if (family === undefined) throw new Error("Saved overlay family is unavailable");
       const config = overlayConfig(family, overlay.configuration);
-      return { id: crypto.randomUUID(), preset, family, config, start: overlay.start, clamped: false };
+      return { id: overlayIds[index], preset, family, config, start: overlay.start, clamped: false, ...(overlay.motion === undefined ? {} : { motion: overlay.motion }) };
     }) };
 }

@@ -1,6 +1,6 @@
 // generated from the Modisign monorepo, do not edit
 import { ASPECTS, type Aspect } from "@/lib/aspects";
-import { clipSchedule, TIMELINE_BOUNDARY_TOLERANCE, type VideoTrack, type ClipSpatial, clampTransition, type ClipTransition, type ClipSettings, type PunchIn, type TextStyle } from "@/lib/studio-project";
+import { clipSchedule, TIMELINE_BOUNDARY_TOLERANCE, type VideoTrack, type ClipSpatial, clampTransition, type ClipTransition, type ClipSettings, type PunchIn, type TextStyle, type LayerMotion, type TitleReveal } from "@/lib/studio-project";
 import { clipGain } from "@/lib/clip-settings";
 import type { OwnPhoto } from "@/lib/studio-photo";
 import type { OwnVideo } from "@/lib/own-video";
@@ -16,16 +16,23 @@ export type TimelineOverlay = {
   height: number;
   duration: number;
   startsAt: number;
+  // Seconds since startsAt; the composition keeps its own authored animation.
+  motion?: LayerMotion;
 };
 
 export type PreviewOverlay = TimelineOverlay & { id: string; liveValues?: Values };
 // A title resolved to output time: wrapped paragraphs (stamp first) shown from `start` until `end`.
-export type TimelineText = TextStyle & { paragraphs: string[]; start: number; end: number };
+// Motion keys and the reveal's start are title-local seconds, shifted by `animationOffset` for a title cut from the middle of a longer one.
+// A person title is drawn inside its owner footage group (`owner` indexes the timeline clips) with that picture's people erased from it.
+export type TimelineOcclusion = { owner: number; threshold: number; feather: number; smoothing: number };
+export type TimelineText = TextStyle & { paragraphs: string[]; start: number; end: number; motion?: LayerMotion; reveal?: TitleReveal; occlusion?: TimelineOcclusion; animationOffset?: number };
+// A placed sound resolved to output time: `start` is its uncropped start (negative when a linked sound leads into the edit), the retained span is [inPoint, outPoint) of the pack asset.
+export type TimelineSfx = { id: string; asset: string; start: number; inPoint: number; outPoint: number; gain: number; fadeIn: number; fadeOut: number };
 
 export type VideoPreviewTimeline = Omit<VideoTimeline, "overlays"> & { overlays: PreviewOverlay[] };
 
 export type TimelineClip = ((OwnVideo & { kind: "video"; inPoint?: number; outPoint?: number })
-  | (OwnPhoto & { kind: "photo"; duration: number })) & ClipSpatial & { id: string; track: VideoTrack; startsAt: number; settings?: ClipSettings; punchIns?: PunchIn[]; sourceStart?: number; transition?: ClipTransition };
+  | (OwnPhoto & { kind: "photo"; duration: number })) & ClipSpatial & { id: string; track: VideoTrack; startsAt: number; settings?: ClipSettings; punchIns?: PunchIn[]; sourceStart?: number; transition?: ClipTransition; motion?: LayerMotion };
 
 export type TimingClip = { track: VideoTrack; start?: number; startsAt?: number; kind?: "video" | "photo"; duration: number; inPoint?: number; outPoint?: number; settings?: ClipSettings; punchIns?: PunchIn[]; sourceStart?: number; transition?: ClipTransition };
 
@@ -46,6 +53,7 @@ export type VideoTimeline = {
   clips: TimelineClip[];
   overlays: TimelineOverlay[];
   texts?: TimelineText[];
+  sfx?: TimelineSfx[];
   captions?: CaptionSettings & { lines: CaptionLine[] };
   width: number;
   height: number;
@@ -63,19 +71,22 @@ function timed(clips: TimingClip[]) {
 }
 export function cutTransition(clips: TimingClip[], index: number) {
   const clip = clips[index];
-  if (clip.track !== "v1") return undefined;
-  const next = clips.slice(index + 1).find((clip) => clip.track === "v1");
-  return next === undefined || clip.transition === undefined ? undefined : clampTransition(clip.transition, clipDuration(clip), clipDuration(next));
+  if (clip.track !== "v1" || clip.transition === undefined) return undefined;
+  for (let next = index + 1; next < clips.length; next++) {
+    if (clips[next].track === "v1") return clampTransition(clip.transition, clipDuration(clip), clipDuration(clips[next]));
+  }
+  return undefined;
 }
 export function clipStarts(clips: TimingClip[]) {
   const starts = clipSchedule(timed(clips));
   return clips.map((clip, index) => clip.startsAt === undefined ? starts[index] : clip.startsAt);
 }
-export function timelineDuration(clips: TimingClip[]) {
-  const starts = clipStarts(clips);
+export function timelineDuration(clips: TimingClip[], starts = clipStarts(clips)) {
   return clips.reduce((end, clip, index) => Math.max(end, starts[index] + clipDuration(clip)), 0);
 }
-export function timelineSampler(clips: TimingClip[], starts = clipStarts(clips)) {
+export interface TimelineSample { index: number; time: number; opacity: number; gain: number }
+export type TimelineSampler = (time: number) => TimelineSample[];
+export function timelineSampler(clips: TimingClip[], starts = clipStarts(clips)): TimelineSampler {
   const v1 = clips.flatMap((clip, index) => clip.track === "v1" ? [index] : []);
   const v2 = clips.flatMap((clip, index) => clip.track === "v2" ? [index] : []);
   const incoming = new Map(v1.map((index, position) => [index, position === 0 ? undefined : cutTransition(clips, v1[position - 1])]));
@@ -91,7 +102,7 @@ export function timelineSampler(clips: TimingClip[], starts = clipStarts(clips))
     return indices.slice(Math.max(0, low - count), low);
   }
   return (time: number) => {
-  const visible: { index: number; time: number; opacity: number; gain: number }[] = [];
+  const visible: TimelineSample[] = [];
   for (const index of [...active(v1, time, 2), ...active(v2, time, 1)]) {
     const clip = clips[index];
     const duration = clipDuration(clip);
@@ -118,6 +129,14 @@ export function timelineSampler(clips: TimingClip[], starts = clipStarts(clips))
 }
 export function visibleClips(clips: TimingClip[], time: number, starts = clipStarts(clips)) {
   return timelineSampler(clips, starts)(time);
+}
+// True when the clips differ at most in `motion`, which never changes media, timing or native sources.
+export function sameClipsIgnoringMotion(a: TimelineClip[], b: TimelineClip[]) {
+  return a === b || (a.length === b.length && a.every((clip, index) => {
+    const keys = new Set([...Object.keys(clip), ...Object.keys(b[index])]);
+    keys.delete("motion");
+    return [...keys].every((key) => clip[key as keyof TimelineClip] === b[index][key as keyof TimelineClip]);
+  }));
 }
 
 export function studioSize(aspect: Aspect, longSide = 1920) {

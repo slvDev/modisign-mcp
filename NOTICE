@@ -11,3 +11,15 @@ https://modisign.app/terms
 
 The bundled Montserrat, Lora and Roboto Mono fonts are licensed under SIL Open
 Font License 1.1; see the matching dist/studio/*-OFL.txt files. The bundled ONNX runtime retains its MIT license.
+
+The bundled sound effects in dist/studio/sfx/ugc-1 are not MIT licensed: each of
+the ten recordings is dedicated to the public domain under CC0 1.0 by its
+author. Their provenance, creators and licence texts are in NOTICE.txt,
+manifest.json and the licenses folder of that directory.
+
+The bundled people model (dist/studio/person-models/people-v1) and the people runtime
+(dist/studio/person-runtime) used for titles behind people are not MIT licensed: the
+Selfie Segmenter model and the MediaPipe Tasks Vision runtime are Apache-2.0 (the model, wasm
+and loader files are unmodified; person-worker.js is Modisign code bundling the runtime's
+JavaScript API), and the runtime's compiled third-party components keep their own licences. Their
+provenance, notices and licence texts are in the NOTICE.txt and licenses folders beside them.

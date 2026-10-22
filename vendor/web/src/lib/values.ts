@@ -1,6 +1,6 @@
 // generated from the Modisign monorepo, do not edit
 import { isValidValue, type Value, type Values, type Variable } from "../../../server/src/template-values.ts";
-export { ROLES, CONTROL_CHARS, isPositive, isRelevant, isValidValue, type Role, type Value, type Values, type Variable } from "../../../server/src/template-values.ts";
+export { ROLES, CONTROL_CHARS, activeCues, isPositive, isRelevant, isValidValue, type Cue, type Role, type Value, type Values, type Variable } from "../../../server/src/template-values.ts";
 
 // Returns the first key that is undeclared or holds a value its variable rejects.
 export function findInvalidValue(variables: Variable[], values: Record<string, unknown>) {

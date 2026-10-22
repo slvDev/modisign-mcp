@@ -17,8 +17,8 @@ export async function loadStudioFamilies(): Promise<StudioFamily[]> {
   return Promise.all((await loadFamilies()).map(async (family) => {
     const looks = await loadLooks(family);
     const presets = await loadPresets(family);
-    const { id, name, variables, supported_aspects, default_duration } = family;
-    return { id, name, variables, supported_aspects, default_duration, looks,
+    const { id, name, variables, cues, supported_aspects, default_duration } = family;
+    return { id, name, variables, cues, supported_aspects, default_duration, looks,
       freeConfigs: presets.filter((preset) => preset.listed && preset.free).map((preset) => presetConfig(family, looks, preset)) };
   }));
 }

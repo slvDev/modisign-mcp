@@ -5,7 +5,7 @@ import { cache } from "react";
 import { ASPECTS, type Aspect, isAspect } from "@/lib/aspects";
 import { FAMILY_IDS, type FamilyId } from "@/lib/family-ids";
 import { isPositive, type Variable, type Look, type Values } from "@/lib/values";
-import { validateTemplatePalettes, validateVariables } from "../../../server/src/template-values";
+import { declaredCues, ROOT_DURATION, validateTemplatePalettes, validateVariables, type Cue } from "../../../server/src/template-values";
 
 // Families live outside the Next app so the renderer and the site share one source.
 export const TEMPLATES_DIR = join(process.cwd(), "..", "templates");
@@ -21,6 +21,7 @@ export type Family = {
   default_duration: number;
   html: string;
   variables: Variable[];
+  cues: Cue[];
 };
 
 export const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -42,8 +43,6 @@ function replaceOnce(html: string, pattern: RegExp, replacement: string) {
   if (matches?.length !== 1) throw new Error(`Expected one ${pattern} in family HTML, found ${matches?.length ?? 0}`);
   return html.replace(pattern, replacement);
 }
-
-const ROOT_DURATION = /(<div\b[^>]*\sid="root"[^>]*\sdata-duration=")([\d.]+)"/;
 
 // Cached per request: metadata, the page and the catalog loaders ask for the same family.
 export const loadFamily = cache(async (id: FamilyId): Promise<Family> => {
@@ -84,7 +83,8 @@ export const loadFamily = cache(async (id: FamilyId): Promise<Family> => {
     throw new Error(`${id}: root data-duration must equal default_duration`);
   }
 
-  const family = { id, name, tagline, version, supported_aspects, default_duration, html, variables };
+  const cues = declaredCues(id, html, variables);
+  const family = { id, name, tagline, version, supported_aspects, default_duration, html, variables, cues };
   await loadLooks(family);
   return family;
 });

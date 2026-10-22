@@ -11,6 +11,9 @@ Make animated overlays and edit short videos from Claude, ChatGPT, Cursor or any
 - “Cut these three clips into one Reel, remove the pauses and add captions.”
 - “Put reference.mp4 on top, muted, me.mp4 on the bottom, crop 5% off the sides, start them together, Clean captions from my voice.”
 - “Make a five-frame rapid intro from grind.mp4, pour.mp4, stir.mp4, steam.mp4 and serve.mp4, then replay them with source timestamps and the labels “Grind beans”, “Pour water”, “Stir”, “Steam milk” and “Serve”, in 9:16.”
+- “On the first clip, smoothly zoom from 100% at source 0s to 120% at 2s, then slide 15% left by 3s; fade ‘Watch this’ in over its first half-second, in 9:16.”
+- “Add a quiet interface click at 1.2 seconds and a bubble pop when the title “My three tips” appears; keep the clip's speech volume unchanged.”
+- “Add subtle whooshes at my crossfades and clicks at declared overlay taps, using different variants; tell me which overlays have no tap cue.”
 - “Show me hook title overlays for a cooking channel.”
 - “Render the countdown overlay with a transparent background.”
 
@@ -33,7 +36,7 @@ Every clip needs `track`. V1 plays in list order; V2 needs `start` in timeline s
 
 ## Rapid intro and titles example
 
-A rapid intro opens with 5–7 teaser cuts of three to six frames each (default five), then replays the unchanged clips with a label and a timestamp over each. Give the descriptions yourself or tell your assistant what each clip shows: Modisign does not look at pictures. Titles are free and stay on your computer. The prompt above is one `edit_video` call:
+A rapid intro opens with 5–7 teaser cuts of three to six frames each (default five), then replays the unchanged clips with a label and a timestamp over each. Give the descriptions yourself or tell your assistant what each clip shows: Modisign does not look at pictures. Plain titles are free and stay on your computer. The prompt above is one `edit_video` call:
 
 ```json
 {
@@ -59,6 +62,51 @@ A rapid intro opens with 5–7 teaser cuts of three to six frames each (default 
 ```
 
 `timestamp: "source"` stamps each label with the clip's starting time in its source file (`timeline` uses the output time; `none` shows only the text). Teasers are muted unless `mute_teasers` is false. Every time you give for V2 clips, overlays or titles moves later by the intro's length, so give it as for the edit without the intro. The video must keep every clip at least as long as its teaser (3 frames, 0.1 seconds, is the shortest any clip can be).
+
+A title can also take an optional `reveal`, a rectangular wipe over stationary text: `"reveal":{"direction":"right","duration":0.5}` shows “Coffee in five steps” growing from its left edge over half a second. Every field is optional and the tool schema lists them. It is drawn on your computer, and a title with a reveal needs Pro to export.
+
+To put a title behind a person, add `occlusion`: “Put the title ‘Sunday reset’ behind me in this clip from 1 to 4 seconds, near the top, with a soft edge” is `"texts":[{"text":"Sunday reset","start":1,"duration":3,"y":0.25,"occlusion":{"clip":0,"feather":2}}]`. `clip` is the index in `clips` of the clip whose people stand in front; the tool schema has the other fields and rules. People are found on your computer with a small people model that ships inside the package, and nothing about them leaves your computer. A title behind people needs Pro to export.
+
+## Motion example
+
+Clips, titles and overlays take optional `motion`: keyframes for `x`, `y`, `scale`, `rotation` and `opacity` that move, scale, rotate or fade the whole layer. The motion prompt above is one `edit_video` call:
+
+```json
+{
+  "clips": [{
+    "path": "/absolute/clip.mp4", "track": "v1", "in": 0, "out": 4,
+    "motion": {
+      "scale": [{"at":0,"value":1,"easing":"ease-in-out"}, {"at":2,"value":1.2,"easing":"linear"}],
+      "x": [{"at":0,"value":0,"easing":"hold"}, {"at":2,"value":0,"easing":"ease-in-out"}, {"at":3,"value":-0.15,"easing":"linear"}]
+    }
+  }],
+  "texts": [{
+    "text": "Watch this", "start": 0, "duration": 4,
+    "motion": {"opacity": [{"at":0,"value":0,"easing":"ease-out"}, {"at":0.5,"value":1,"easing":"linear"}]}
+  }],
+  "aspect": "9x16"
+}
+```
+
+Each key is `{at, value, easing}`; `at` is source seconds for footage (photos use the photo's own clock, from its `in`) and local seconds from its own start for titles and overlays. `x` and `y` are fractions of the output width and height (positive right and down), `scale` is a multiplier, `rotation` is clockwise degrees and `opacity` runs 0–1. `easing` shapes the segment after its key: `hold`, `linear`, `ease-in`, `ease-out`, `ease-in-out` or a custom `[x1, y1, x2, y2]` curve with each number from 0 to 1. Before the first key and after the last, the value holds. `zoom` stays static framing inside the picture; `motion.scale` moves the whole placed picture. Up to 60 keys per channel and 1000 per request. Footage and title motion are free; any non-neutral motion key on a catalog overlay, even on a free preset, needs Pro.
+
+## Sound effects example
+
+`edit_video` can add short effects from a free built-in pack of ten sounds (click, typing, whoosh, pop and sparkle, two of each). They play alongside your clips, never change speech volume or the video's length, and cannot be replaced by your own files or links. The first prompt above is one `sfx` list:
+
+```json
+{
+  "clips": [{ "path": "/Users/me/take.mp4", "track": "v1", "out": 8 }],
+  "texts": [{ "text": "My three tips", "start": 0.8, "duration": 2 }],
+  "sfx": [
+    { "asset": "ugc-click-01", "start": 1.2, "gain": 0.25 },
+    { "asset": "ugc-pop-01", "anchor": { "kind": "title-enter", "text": 0 } }
+  ],
+  "aspect": "9x16"
+}
+```
+
+A sound starts at a time (seconds of the edit as you describe it before pause removal or a rapid intro, which move it along) or follows a title appearing, a transition or an overlay tap. The second prompt is `"auto_sfx": {"events": ["transition", "cta-tap"], "intensity": "subtle"}`: Modisign places one sound per event on the finished edit and the job result lists what it added and skipped, such as overlays without a declared tap. Sounds are free.
 
 ## Install
 
@@ -121,15 +169,15 @@ Run `npx -y @modisign/mcp doctor` to check your setup.
 ## Free and Pro
 
 One free preset per overlay type renders without an account; format and background changes stay free.  
-Customised overlays, Pro presets and expressive caption styles need Pro.  
-Video edits with no overlays or only free presets and Clean, Boxed or Minimal captions are free, including titles and the rapid intro.  
+Customised overlays (including overlay motion), Pro presets and expressive caption styles need Pro.  
+Video edits with no overlays or only unchanged free presets and Clean, Boxed or Minimal captions are free, including footage and title motion, plain titles, the rapid intro and sound effects. A title with a reveal or behind people needs Pro.
 Pro is $9/month: [Pricing](https://modisign.app/pricing). Sign in with `npx -y @modisign/mcp login`.
 
 ## Privacy
 
 - Your videos, photos and audio never leave your computer.
-- Only overlay settings, overlay text and the chosen caption style reach Modisign.
-- Titles and rapid-intro labels never reach Modisign; your assistant sees them in the request.
+- Only overlay settings, overlay text, the chosen caption style and two yes/no facts (whether an overlay's motion was customised, whether a title uses a reveal or Behind people) reach Modisign.
+- Titles, rapid-intro labels, sound choices and motion keys never reach Modisign; your assistant sees them in the request.
 - Captions are made on your computer with an English speech model downloaded once from Hugging Face (about 43 MB).
 - Anonymous usage counts have no account link; turn them off with `MODISIGN_NO_TELEMETRY=1`.
 

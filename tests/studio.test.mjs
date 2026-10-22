@@ -98,6 +98,19 @@ test('crop and placement share geometry bounds and V2 alone can extend the outpu
   for (const mode of ['full', 'top', 'bottom', 'left', 'right', 'pip-top-left', 'pip-top-right', 'pip-bottom-left', 'pip-bottom-right']) assert.doesNotThrow(() => validateEdit(input([{ path: '/a', track: 'v1', place: { mode } }])));
 });
 
+test('the speech runtime is the plain WASM pair of the ORT build Transformers.js imports, with no JSEP assets', async () => {
+  const { readFile, readdir } = await import('node:fs/promises');
+  const { createRequire } = await import('node:module');
+  const { dirname, join } = await import('node:path');
+  const { assetRoutes } = await import('../dist/studio-browser.js');
+  const require = createRequire(import.meta.url);
+  const ortDist = dirname(createRequire(require.resolve('@huggingface/transformers')).resolve('onnxruntime-web'));
+  const runtime = [...(await assetRoutes())].filter(([route]) => route.startsWith('/speech-runtime/'));
+  assert.deepEqual(runtime.map(([route]) => route.split('/').pop()).sort(), ['ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']);
+  for (const [, file] of runtime) assert.deepEqual(await readFile(file), await readFile(join(ortDist, file.split('/').pop())));
+  assert.deepEqual((await readdir(new URL('../dist/studio/', import.meta.url))).filter(name => /jsep/i.test(name)), []);
+});
+
 test('browser silence rejection stops export; successful transition repair returns a warning', { timeout: 120_000 }, async () => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -253,4 +266,69 @@ test('overlapping selectors are classified by their merged result, exactly as St
     const looks = Object.values(applyWordStyles(state(), selectors).wordStyles['media-0'] ?? {});
     assert.equal(looks.some(look => Object.values(look).some(value => value !== false)), customized, `Studio agrees: ${JSON.stringify(selectors)}`);
   }
+});
+
+const photo = { kind: 'photo', duration: 3, width: 800, height: 600 };
+const rows = (...keys) => keys.map(([at, value, easing = 'linear']) => ({ at, value, easing }));
+const run = count => Array.from({ length: count }, (_, index) => ({ at: index * 0.5, value: 0.5, easing: 'linear' }));
+// "Zoom from 100% at source 0s to 120% at 2s, then slide 15% left by 3s."
+const ZOOM = { scale: rows([0, 1, 'ease-in-out'], [2, 1.2]), x: rows([0, 0, 'hold'], [2, 0, 'ease-in-out'], [3, -0.15]) };
+
+test('clip motion keeps its rows in source seconds across trims, photos, V2, repeated paths and interspersed cuts', () => {
+  const fade = { opacity: rows([-5, 1], [5, 0.5, [0.25, 0.1, 0.25, 1]]) };
+  const request = { ...input([
+    { path: '/a.mp4', track: 'v1', in: 1, out: 3, motion: ZOOM },
+    { path: '/ref.png', track: 'v2', start: 0, out: 2, motion: fade },
+    { path: '/a.mp4', track: 'v1', motion: { rotation: rows([0, 0], [1, 360]) } },
+    { path: '/a.mp4', track: 'v1' },
+  ]), transitions: [{ after_clip: 0, type: 'crossfade', duration: 0.4 }, { after_clip: 2, type: 'dip', duration: 0.4 }] };
+  const clips = mapClips(request, [video(4), photo, video(4), video(4)]);
+  assert.deepEqual(clips.map(clip => clip.id), ['clip-0', 'clip-2', 'clip-3', 'clip-1']);
+  assert.deepEqual(clips[0].motion, ZOOM);
+  assert.equal(clips[0].inPoint, 1);
+  assert.deepEqual(clips[1].motion, { rotation: rows([0, 0], [1, 360]) });
+  assert.equal(Object.hasOwn(clips[2], 'motion'), false);
+  assert.deepEqual(clips[3].motion, fade);
+  assert.equal(clips[3].sourceStart, 0);
+  assert.deepEqual([clips[0].transition.to, clips[1].transition.to], ['clip-2', 'clip-3']);
+  // A photo's keys sit on its own clock, which starts at its in.
+  const [late] = mapClips(input([{ path: '/p.png', track: 'v1', in: 1, out: 3, motion: ZOOM }]), [photo]);
+  assert.deepEqual([late.sourceStart, late.motion], [1, ZOOM]);
+  const document = editDocument(input([{ path: '/a.mp4', track: 'v1', motion: ZOOM }]), speechMedia());
+  assert.deepEqual(document.clips[0].motion, ZOOM);
+});
+
+test('motion errors name the request field and the shared reason before any media is read', () => {
+  const nonidentity = rows([0, 1], [1, 6]);
+  const table = [
+    [null, 'Motion must be an object of channels'], [[], 'Motion must be an object of channels'], [{}, 'Motion needs at least one channel'],
+    [{ skew: rows([0, 1]) }, 'Motion has no skew channel. Use x, y, scale, rotation, opacity'], [{ scale: [] }, 'Motion scale needs at least one key'], [{ scale: null }, 'Motion scale needs at least one key'],
+    [{ scale: [null] }, 'Motion scale[0] needs exactly at, value and easing'], [{ scale: [{ at: 0, value: 1, easing: 'linear', extra: 1 }] }, 'Motion scale[0] needs exactly at, value and easing'], [{ scale: [{ at: 0, value: 1 }] }, 'Motion scale[0] needs exactly at, value and easing'],
+    [{ scale: nonidentity }, 'Motion scale[1].value must be between 0.1 and 5'], [{ x: rows([0, 3]) }, 'Motion x[0].value must be between -2 and 2'], [{ rotation: rows([0, 3601]) }, 'Motion rotation[0].value must be between -3600 and 3600'],
+    [{ opacity: rows([0, 1.5]) }, 'Motion opacity[0].value must be between 0 and 1'], [{ scale: rows([181, 1]) }, 'Motion scale[0].at must be between 0 and 180 seconds'], [{ scale: rows([-1, 1]) }, 'Motion scale[0].at must be between 0 and 180 seconds'],
+    [{ scale: rows([1, 1], [1, 1.2]) }, 'Motion scale[1].at must be later than the previous key'], [{ scale: rows([2, 1], [1, 1.2]) }, 'Motion scale[1].at must be later than the previous key'], [{ scale: rows([1, 1], [1.0000005, 1.2]) }, 'Motion scale[1].at must be later than the previous key'],
+    [{ scale: run(61) }, 'Motion scale has at most 60 keys'],
+    ...['ease', [0, 0, 1], [0, 0, 1.5, 1], [0, -0.1, 1, 1]].map(easing => [{ scale: rows([0, 1, easing]) }, 'Motion scale[0].easing must be hold, linear, ease-in, ease-out, ease-in-out or four numbers between 0 and 1']),
+  ];
+  for (const [motion, reason] of table) {
+    assert.throws(() => mapClips(input([{ path: '/a', track: 'v1' }, { path: '/b', track: 'v1', motion }]), [video(3), video(3)]),
+      error => error.details.field === 'clips.1.motion' && error.message === `Invalid clips.1.motion: ${reason}.`, JSON.stringify(motion));
+    // Before media is known the check accepts the photo's wider domain, so only the 0–180 bound waits for real media.
+    if (!/\.at must be between/.test(reason)) assert.throws(() => validateEdit(input([{ path: '/a', track: 'v2', start: 0, motion }])), error => error.details.field === 'clips.0.motion' && error.message === `Invalid clips.0.motion: ${reason}.`, JSON.stringify(motion));
+  }
+  // Footage keys are 0 to 180 source seconds; only a photo keeps its signed virtual clock, so only real media can tell them apart.
+  for (const at of [-1, 181]) {
+    assert.doesNotThrow(() => validateEdit(input([{ path: '/a', track: 'v1', motion: { scale: rows([at, 1]) } }])));
+    assert.throws(() => mapClips(input([{ path: '/a.mp4', track: 'v1', motion: { scale: rows([at, 1]) } }]), [video(3)]), error => error.details.field === 'clips.0.motion');
+  }
+  for (const at of [-5, 181, 1e6]) assert.equal(mapClips(input([{ path: '/a.png', track: 'v1', motion: { scale: rows([at, 1]) } }]), [photo])[0].motion.scale[0].at, at);
+  assert.throws(() => mapClips(input([{ path: '/a.png', track: 'v1', motion: { scale: rows([2 ** 53, 1]) } }]), [photo]), error => error.details.field === 'clips.0.motion');
+  // Footage accepts the shared bounds exactly, and the request stays within 1000 keys across clips.
+  const edge = { x: rows([0, -2], [180, 2]), scale: rows([0, 0.1], [1, 5]), rotation: rows([0, -3600], [1, 3600]), opacity: rows([0, 0], [1, 1]) };
+  assert.deepEqual(mapClips(input([{ path: '/a', track: 'v1', motion: edge }]), [video(3)])[0].motion, edge);
+  const channels = ['x', 'y', 'scale', 'rotation', 'opacity'];
+  const many = count => input(Array.from({ length: count }, () => ({ path: '/a', track: 'v1', motion: Object.fromEntries(channels.map(channel => [channel, run(60)])) })));
+  assert.doesNotThrow(() => validateEdit(many(3)));
+  assert.throws(() => validateEdit(many(4)), error => error.details.field === 'motion' && /at most 1000 keys/.test(error.message));
+  assert.throws(() => validateEdit(input([{ path: '/a', track: 'v1', motion: ZOOM, animationOffset: 1 }])), error => error.details.field === 'clips.0');
 });

@@ -9,13 +9,27 @@ import { pinFile, pinnedStream, type PinnedFile } from "./pinned-files.js";
 import { browserStatus, hyperframesCli, run } from "./processes.js";
 import { isolatedBrowserArguments, renderProxy } from "./render-isolation.js";
 import { ToolError } from "./errors.js";
+import { SFX_ASSETS, SFX_PACK } from "../vendor/web/src/lib/studio-project.js";
+import { PERSON_MANIFEST } from "../vendor/web/src/lib/person-manifest.js";
 
 const studioAssets = fileURLToPath(new URL("./studio/", import.meta.url));
-const types: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".json": "application/json", ".onnx": "application/octet-stream" };
+const types: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".json": "application/json", ".onnx": "application/octet-stream", ".tflite": "application/octet-stream", ".png": "image/png", ".wav": "audio/wav", ".txt": "text/plain" };
 export async function assetRoutes() {
   const routes = new Map<string, string>();
-  for (const name of await readdir(studioAssets)) routes.set(`/${name}`, join(studioAssets, name));
-  for (const extension of ["mjs", "wasm"]) routes.set(`/speech-runtime/${speechRuntimeVersion}/ort-wasm-simd-threaded.jsep.${extension}`, join(studioAssets, `ort-wasm-simd-threaded.jsep.${extension}`));
+  for (const entry of await readdir(studioAssets, { withFileTypes: true })) if (entry.isFile()) routes.set(`/${entry.name}`, join(studioAssets, entry.name));
+  // Exact pack routes only: the registry's sounds and the shipped notices, never a directory.
+  const pack = join(studioAssets, "sfx", SFX_PACK);
+  const notices = ["manifest.json", "NOTICE.txt", ...(await readdir(join(pack, "licenses"))).map((name) => `licenses/${name}`)];
+  for (const name of [...SFX_ASSETS.map((asset) => asset.file), ...notices]) routes.set(`/sfx/${SFX_PACK}/${name}`, join(pack, name));
+  for (const extension of ["mjs", "wasm"]) routes.set(`/speech-runtime/${speechRuntimeVersion}/ort-wasm-simd-threaded.${extension}`, join(studioAssets, `ort-wasm-simd-threaded.${extension}`));
+  return routes;
+}
+// Exactly what the people worker fetches (its script, one loader/wasm pair, the model and the probe) under the website's own paths; the notices ship in the package but are never served.
+export function personRoutes() {
+  const { runtime, model, probe } = PERSON_MANIFEST;
+  const routes = new Map<string, string>();
+  for (const file of [runtime.worker, ...[runtime.simd, runtime.noSimd].flatMap((pair) => [pair.loader.file, pair.wasm.file])]) routes.set(runtime.directory + file, join(studioAssets, runtime.directory, file));
+  for (const file of [model.file, probe.file]) routes.set(model.directory + file, join(studioAssets, model.directory, file));
   return routes;
 }
 export async function studioBrowser(routes: Map<string, string>, signal: AbortSignal, update: (state: "downloading_browser" | "rendering", fraction: number) => void) {

@@ -2,11 +2,11 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SPEECH_FILES, SPEECH_MODEL, SPEECH_REVISION } from "../vendor/web/src/lib/captions.js";
-import { cacheDir } from "./settings.js";
+import { speechCacheDir } from "./settings.js";
 import { isMissing, ToolError } from "./errors.js";
 
 export async function speechModel(signal: AbortSignal) {
-  const directory = join(cacheDir, "speech", SPEECH_REVISION);
+  const directory = join(speechCacheDir, SPEECH_REVISION);
   const routes = new Map<string, string>();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   for (const file of SPEECH_FILES) {
