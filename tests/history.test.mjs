@@ -158,7 +158,7 @@ test('anonymous and free denials name the Pro part of the request and the way to
   for (const [body, subject] of [
     [{ configuration: '/overlays/hook-title?setup=Custom' }, /^This overlay configuration needs Pro\./],
     [{ ...studio, titleEffects: true }, /^This edit uses a title effect \(reveal or behind person\), which needs Pro\./],
-    [{ ...studio, overlayMotionCustomized: true, captionCustomized: true }, /^This edit uses custom caption word styles, motion on a catalog overlay, which needs Pro\./],
+    [{ ...studio, overlayMotionCustomized: true, captionCustomized: true }, /^This edit uses expressive caption lines or styled words, motion on a catalog overlay, which needs Pro\./],
     [studio, /^This edit's overlay configuration or caption style needs Pro\./],
   ]) {
     for (reason of ['sign_in', 'pro']) {

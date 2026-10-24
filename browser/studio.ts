@@ -2,14 +2,16 @@ import { readOwnVideo } from "../vendor/web/src/lib/own-video";
 import { ImportError } from "../vendor/web/src/lib/import-progress";
 import { readStudioPhoto } from "../vendor/web/src/lib/studio-photo";
 import { captionTranscriber } from "../vendor/web/src/lib/captions-asr";
-import { captionLines, timelineWords } from "../vendor/web/src/lib/captions";
+import { captionLines } from "../vendor/web/src/lib/caption-lines";
 import { detectClipSilences } from "../vendor/web/src/lib/studio-silences";
 import { analyseSourceAudio, sourceHasAudio } from "../vendor/web/src/lib/studio-source";
 import { studioBudgetProblem, studioReducer, type StudioMedia, type StudioOverlay } from "../vendor/web/src/lib/studio-state";
-import { mediaById, studioTimeline } from "../vendor/web/src/lib/studio-projections";
+import { mediaById, studioTimeline, timelineOverlays } from "../vendor/web/src/lib/studio-projections";
 import { clipStarts, studioSize, timelineDuration } from "../vendor/web/src/lib/video-timeline";
 import { exportVideoTimeline } from "../vendor/web/src/lib/timeline-export";
-import { applyAutoSfx, applyRapidIntro, applyWordStyles, checkRequestedSfx, correctTranscript, editDocument, mapSfx, type EditInput } from "../src/studio-request";
+import { applyAutoSfx, applyLineSelectors, applyRapidIntro, applyWordStyles, checkRequestedSfx, checkVisibleLines, correctTranscript, editDocument, mapSfx, type EditInput, type LineMatch } from "../src/studio-request";
+import { prepareScatter } from "../vendor/web/src/lib/caption-prepare";
+import { ScatterError } from "../vendor/web/src/lib/caption-scatter";
 import { SfxLoadError } from "../vendor/web/src/lib/sfx-assets";
 import { personTitlesOf } from "../vendor/web/src/lib/person-layer";
 import { createPersonSession, type PersonPrepareStage, type PersonSession } from "../vendor/web/src/lib/person-prepare";
@@ -33,7 +35,7 @@ type BrowserRequest = { input: EditInput; media: { url: string; name: string; ty
 declare global { interface Window {
   runStudio: (request: BrowserRequest) => Promise<unknown>;
   studioProgress: (fraction: number) => Promise<void>;
-  studioStage: (stage: PersonPrepareStage | "captions" | null) => Promise<void>;
+  studioStage: (stage: PersonPrepareStage | "captions" | "scatter" | null) => Promise<void>;
   studioWrite: (base64: string) => Promise<void>;
 } }
 window.runStudio = async (request) => {
@@ -58,6 +60,7 @@ window.runStudio = async (request) => {
       media.push({ ...loaded, id: `media-${index}`, poster: "", hasAudio: loaded.kind === "video" && await sourceHasAudio(file, signal) });
     }
     let state = editDocument(request.input, media);
+    let matches: LineMatch[] = [];
     const warnings: string[] = [];
     state.overlays = request.overlays.map((item) => item.overlay);
     state.sfx = mapSfx(request.input, state);
@@ -72,7 +75,11 @@ window.runStudio = async (request) => {
         const transcript = await worker.transcribe(item.source.file, item.source.duration);
         if (transcript.audio) {
           const corrections = request.input.captions === undefined || request.input.captions.corrections === undefined ? [] : request.input.captions.corrections;
-          state.transcripts[item.id] = correctTranscript(transcript.words, corrections);
+          const words = correctTranscript(transcript.words, corrections);
+          const next = studioReducer(state, { type: "set-transcript", mediaId: item.id, words });
+          // The reducer keeps the previous document when the caption data would exceed its limits; the speech must never be dropped silently.
+          if (next.transcripts[item.id] !== words) throw new ToolError("Captions were not built: the speech in these source files is too long to caption in one edit. Use fewer or shorter source files.", { field: "captions" });
+          state = next;
         }
       }
       if (request.input.remove_silences !== undefined) {
@@ -82,8 +89,13 @@ window.runStudio = async (request) => {
     }
     if (worker !== null) await window.studioStage(null);
     if (request.input.captions !== undefined && request.input.captions.word_styles !== undefined) state = applyWordStyles(state, request.input.captions.word_styles);
+    if (request.input.captions !== undefined && request.input.captions.lines !== undefined) {
+      const applied = applyLineSelectors(state, request.input.captions.lines);
+      state = applied.state;
+      matches = applied.matches;
+    }
     if (request.transcriptOnly) {
-      const lines = captionLines(timelineWords(state.clips, state.transcripts), "clean");
+      const lines = captionLines(state, { style: "clean", position: "lower", size: "m" });
       const start = request.input.clips[0].in === undefined ? 0 : request.input.clips[0].in;
       return { lines: lines.map((line) => ({ text: line.text, start: line.start + start, end: line.end + start })) };
     }
@@ -105,10 +117,25 @@ window.runStudio = async (request) => {
       checkRequestedSfx(state, request.input);
     }
     if (request.input.rapid_intro !== undefined) state = applyRapidIntro(state, request.input.rapid_intro);
+    if (matches.length > 0) checkVisibleLines(state, matches);
     if (request.input.auto_sfx !== undefined) {
       const auto = applyAutoSfx(state, request.input.auto_sfx);
       state = auto.state;
       warnings.push(...auto.notes);
+    }
+    const scatter = state.captions === null ? undefined : state.captions.scatter;
+    if (scatter !== undefined) {
+      await window.studioStage("scatter");
+      const overlays = timelineOverlays(state.overlays, state.aspect).map((overlay, index) => ({ ...overlay, src: new URL(request.overlays[index].src, location.href).href }));
+      const { plan } = await prepareScatter(state, { signal, overlays, onProgress: ({ fraction }) => { if (fraction !== null) void window.studioProgress(0.1 + 0.1 * fraction); } });
+      await window.studioStage(null);
+      if (plan.conflicts.length > 0) {
+        const [first] = plan.conflicts;
+        throw new ToolError(`Scatter could not keep ${plan.conflicts.length} caption phrase${plan.conflicts.length === 1 ? "" : "s"} clear of the edit (the first at ${first.time.toFixed(2)} seconds, blocked by ${first.owner}). Move that overlay or title, use fewer or smaller caption styles, or choose safe_zone frame.`, { field: "captions.scatter", conflicts: plan.conflicts.length });
+      }
+      const planned = studioReducer({ ...state, message: null }, { type: "set-caption-scatter", scatter, plan });
+      if (planned.message !== null) throw new ToolError(`Scatter was not applied: ${planned.message}`, { field: "captions.scatter" });
+      state = planned;
     }
     const budget = studioBudgetProblem(state);
     if (budget !== null) throw new ToolError(budget);
@@ -143,6 +170,7 @@ window.runStudio = async (request) => {
     if (error instanceof ToolError) return { error: error.message, details: error.details };
     if (error instanceof SfxLoadError) return { error: error.message, details: { field: "sfx", asset: error.asset.id } };
     if (error instanceof PersonBudgetError) return { error: error.message, details: { field: "texts.occlusion" } };
+    if (error instanceof ScatterError) return { error: `Caption placement failed while preparing ${error.stage === "fonts" ? "fonts" : error.stage === "overlays" ? "the overlays and titles" : "phrase positions"}.`, details: { field: "captions.scatter", stage: error.stage } };
     if (error instanceof PersonRuntimeError) return { error: `The people model ${PERSON_FAILURES[error.code]}, so the title cannot go behind people.`, details: { reason: "people_model", code: error.code } };
     throw error;
   } finally {

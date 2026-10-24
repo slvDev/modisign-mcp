@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapClips, validateEdit, editDocument, correctTranscript, applyWordStyles, selectorsCustomized } from '../dist/studio-request.js';
+import { mapClips, validateEdit, editDocument, correctTranscript, applyWordStyles, selectorsCustomized, applyLineSelectors, checkVisibleLines, captionsCustomized, applyRapidIntro } from '../dist/studio-request.js';
 
 const video = duration => ({ kind: 'video', duration, width: 1920, height: 1080 });
 const input = clips => ({ clips, aspect: '9x16' });
@@ -265,6 +265,196 @@ test('overlapping selectors are classified by their merged result, exactly as St
     assert.equal(selectorsCustomized(selectors), customized, JSON.stringify(selectors));
     const looks = Object.values(applyWordStyles(state(), selectors).wordStyles['media-0'] ?? {});
     assert.equal(looks.some(look => Object.values(look).some(value => value !== false)), customized, `Studio agrees: ${JSON.stringify(selectors)}`);
+  }
+});
+
+const GROUPING = { max_words: 4, max_characters: 24, max_duration: 1.8, pause: 0.35 };
+const SCATTER = { seed: 58, safe_zone: 'social', intensity: 'normal', styles: ['clean', 'boxed'] };
+const PLACEMENT = { position: 'lower', size: 'm' };
+const DEFAULT_MIX = { preset: 'creator', seed: 58, palette: ['#FFF4DC', '#FFD60A', '#FF5FA2'] };
+// Three phrases: 0-1 s (middle 0.5), 1.2-2.2 s (middle 1.7) and, after a 0.8 s pause, 3-4 s (middle 3.5).
+const phraseWords = [[0, 'i tried this today.'], [1.2, 'and it actually worked.'], [3, 'here is the shortcut']]
+  .flatMap(([start, text]) => text.split(' ').map((word, index) => ({ text: word, start: start + index * 0.25, end: start + (index + 1) * 0.25 })))
+  .map((word, index) => ({ id: `w${index}`, ...word }));
+const speech = (captions = {}, clips = [{ track: 'v1', path: '/speech.mp4' }], words = phraseWords) => {
+  const state = editDocument({ ...input(clips), captions: { style: 'clean', ...PLACEMENT, ...captions } }, speechMedia(clips.length));
+  return { ...state, transcripts: Object.fromEntries(clips.map((_, index) => [`media-${index}`, words])) };
+};
+const line = (extra = {}) => ({ clip: 0, from: 0, to: 1, x: 0.3, ...extra });
+
+test('malformed grouping, scatter and line selectors name the failing field before any media or job', () => {
+  const clips = [{ track: 'v1', path: '/speech.mp4' }, { track: 'v2', start: 0, path: '/reference.mp4' }];
+  const rows = [
+    ...[0, 13, 4.5].map(value => [{ grouping: { ...GROUPING, max_words: value } }, 'captions.grouping.max_words']),
+    ...[7, 61, 24.5].map(value => [{ grouping: { ...GROUPING, max_characters: value } }, 'captions.grouping.max_characters']),
+    ...[0.4, 31].map(value => [{ grouping: { ...GROUPING, max_duration: value } }, 'captions.grouping.max_duration']),
+    ...[0.05, 2.1].map(value => [{ grouping: { ...GROUPING, pause: value } }, 'captions.grouping.pause']),
+    [{ grouping: { max_words: 4 } }, 'captions.grouping.max_characters'],
+    [{ grouping: { ...GROUPING, words: 4 } }, 'captions.grouping'],
+    [{ grouping: 4 }, 'captions.grouping'],
+    ...[-1, 1.5, 4294967296].map(value => [{ scatter: { ...SCATTER, seed: value } }, 'captions.scatter.seed']),
+    [{ scatter: { ...SCATTER, safe_zone: 'tiktok' } }, 'captions.scatter.safe_zone'],
+    [{ scatter: { ...SCATTER, intensity: 'wild' } }, 'captions.scatter.intensity'],
+    ...[[], ['clean', 'clean'], ['clean', 'glitter'], 'clean'].map(styles => [{ scatter: { ...SCATTER, styles } }, 'captions.scatter.styles']),
+    [{ scatter: { safe_zone: 'social', intensity: 'normal', styles: ['clean'] } }, 'captions.scatter.seed'],
+    [{ scatter: { ...SCATTER, mix: {} } }, 'captions.scatter'],
+    ...[-0.1, 1.1].flatMap(value => [[{ lines: [line({ x: value })] }, 'captions.lines.0.x'], [{ lines: [line({ y: value })] }, 'captions.lines.0.y']]),
+    ...[0.019, 0.141].map(value => [{ lines: [line({ size: value })] }, 'captions.lines.0.size']),
+    ...[-30.1, 30.1].map(value => [{ lines: [line({ rotation: value })] }, 'captions.lines.0.rotation']),
+    [{ lines: [line({ style: 'glitter' })] }, 'captions.lines.0.style'],
+    [{ lines: [line({ style: 'mixed', mix: { preset: 'poster' } })] }, 'captions.lines.0.mix.preset'],
+    [{ lines: [line({ style: 'mixed', mix: { preset: 'creator', palette: ['#ffffff'] } })] }, 'captions.lines.0.mix'],
+    [{ lines: [line({ style: 'boxed', mix: { preset: 'creator' } })] }, 'captions.lines.0.mix'],
+    [{ lines: [line({ mix: { preset: 'creator' } })] }, 'captions.lines.0.mix'],
+    [{ lines: [{ clip: 0, from: 0, to: 1 }] }, 'captions.lines.0'],
+    [{ lines: [line({ text: 'hello' })] }, 'captions.lines.0'],
+    [{ lines: [line(), line({ x: 2 })] }, 'captions.lines.1.x'],
+    [{ lines: [line({ clip: 1 })] }, 'captions.lines.0.clip'],
+    [{ lines: [line({ clip: 9 })] }, 'captions.lines.0.clip'],
+    [{ lines: [line({ clip: 0.5 })] }, 'captions.lines.0.clip'],
+    [{ lines: [line({ from: 1, to: 1 })] }, 'captions.lines.0'],
+    [{ lines: [line({ from: -1 })] }, 'captions.lines.0'],
+    [{ lines: [line({ to: 181 })] }, 'captions.lines.0'],
+    [{ lines: Array.from({ length: 101 }, () => line()) }, 'captions.lines'],
+    [{ lines: 'all' }, 'captions.lines'],
+  ];
+  for (const [captions, field] of rows) assert.throws(() => validateEdit({ ...input(clips), captions: { style: 'clean', ...PLACEMENT, ...captions } }), error => error.details.field === field, `${field}: ${JSON.stringify(captions).slice(0, 120)}`);
+  const valid = [
+    { grouping: GROUPING },
+    { grouping: { max_words: 1, max_characters: 8, max_duration: 0.5, pause: 0.1 } },
+    { grouping: { max_words: 12, max_characters: 60, max_duration: 30, pause: 2 } },
+    { scatter: SCATTER },
+    { scatter: { seed: 4294967295, safe_zone: 'frame', intensity: 'subtle', styles: ['clean', 'boxed', 'minimal', 'mixed'] } },
+    { lines: [line({ x: 0, y: 1, size: 0.02, rotation: -30 }), line({ size: 0.14, rotation: 30 }), line({ rotation: 0 }), line({ style: 'mixed' }), line({ style: 'mixed', mix: { preset: 'editorial', seed: 3 } }), line({ style: 'boxed' })] },
+    { lines: Array.from({ length: 100 }, () => line()) },
+  ];
+  for (const captions of valid) assert.doesNotThrow(() => validateEdit({ ...input(clips), captions: { style: 'clean', ...PLACEMENT, ...captions } }), JSON.stringify(captions).slice(0, 120));
+});
+
+test('clip caption switches and the intro teaser option are boolean, v1 and caption-only, and map to the shared clip flag', () => {
+  const five = (extra = {}) => Array.from({ length: 5 }, () => ({ track: 'v1', path: '/speech.mp4', out: 2, ...extra }));
+  const intro = (extra = {}) => ({ clips: [0, 1, 2, 3, 4], labels: [0, 1, 2, 3, 4].map(clip => ({ clip, text: `Step ${clip}` })), ...extra });
+  const captions = { style: 'clean', ...PLACEMENT };
+  for (const [request, field] of [
+    [{ ...input([{ track: 'v1', path: '/a', captions_enabled: 'no' }]), captions }, 'clips.0.captions_enabled'],
+    [{ ...input([{ track: 'v1', path: '/a' }, { track: 'v2', start: 0, path: '/b', captions_enabled: false }]), captions }, 'clips.1.captions_enabled'],
+    [input([{ track: 'v1', path: '/a', captions_enabled: false }]), 'clips.0.captions_enabled'],
+    [{ ...input(five()), captions, rapid_intro: intro({ captions_on_teasers: 'yes' }) }, 'rapid_intro.captions_on_teasers'],
+    [{ ...input(five()), rapid_intro: intro({ captions_on_teasers: true }) }, 'rapid_intro.captions_on_teasers'],
+  ]) assert.throws(() => validateEdit(request), error => error.details.field === field, field);
+  const clips = mapClips({ ...input([{ track: 'v1', path: '/a', captions_enabled: false }, { track: 'v1', path: '/b', captions_enabled: true }, { track: 'v1', path: '/c' }]), captions }, [video(2), video(2), video(2)]);
+  assert.deepEqual(clips.map(clip => clip.captionEnabled), [false, undefined, undefined]);
+  assert.ok(!Object.hasOwn(clips[1], 'captionEnabled'), 'enabled clips carry no flag, as the reducer and projects store it');
+  // The rapid intro teasers have no captions unless asked; the body and its muted clips keep them.
+  const state = () => { const document = editDocument({ ...input(five({ mute: true })), captions }, speechMedia(5)); return document; };
+  const teasers = after => after.clips.filter(clip => clip.id.startsWith('teaser-')).map(clip => clip.captionEnabled);
+  assert.deepEqual(teasers(applyRapidIntro(state(), intro())), [false, false, false, false, false]);
+  assert.deepEqual(teasers(applyRapidIntro(state(), intro({ captions_on_teasers: false }))), [false, false, false, false, false]);
+  assert.deepEqual(teasers(applyRapidIntro(state(), intro({ captions_on_teasers: true }))), [undefined, undefined, undefined, undefined, undefined]);
+  assert.ok(applyRapidIntro(state(), intro()).clips.filter(clip => !clip.id.startsWith('teaser-')).every(clip => clip.captionEnabled === undefined && clip.settings.muted), 'muted body clips keep their captions');
+});
+
+test('grouping and scatter reach the document settings, with Scatter grouping only when none is given', () => {
+  const settings = captions => editDocument({ ...input([{ track: 'v1', path: '/speech.mp4' }]), captions: { style: 'clean', ...PLACEMENT, ...captions } }, speechMedia()).captions;
+  const scatter = { seed: 58, safeZone: 'social', intensity: 'normal', styles: ['clean', 'boxed'] };
+  assert.deepEqual(settings({}), { style: 'clean', ...PLACEMENT });
+  assert.deepEqual(settings({ grouping: GROUPING }), { style: 'clean', ...PLACEMENT, grouping: { maxWords: 4, maxCharacters: 24, maxDuration: 1.8, pause: 0.35 } });
+  assert.deepEqual(settings({ scatter: SCATTER }), { style: 'clean', ...PLACEMENT, grouping: { maxWords: 4, maxCharacters: 24, maxDuration: 1.8, pause: 0.35 }, scatter });
+  assert.deepEqual(settings({ scatter: SCATTER, grouping: { ...GROUPING, max_words: 6 } }), { style: 'clean', ...PLACEMENT, grouping: { maxWords: 6, maxCharacters: 24, maxDuration: 1.8, pause: 0.35 }, scatter });
+});
+
+test('line selectors address whole phrases by source midpoint inside the trim, after corrections, and fail loudly when nothing matches', () => {
+  const overrides = (state, selectors) => applyLineSelectors(state, selectors).state.lineOverrides;
+  const select = (from, to, extra = { x: 0.3 }, clip = 0) => ({ clip, from, to, ...extra });
+  assert.deepEqual(overrides(speech(), [select(0.4, 0.6)]), { 'media-0': { w0: { x: 0.3 } } });
+  assert.deepEqual(applyLineSelectors(speech(), [select(0.4, 0.6)]).matches, [{ mediaId: 'media-0', phraseIds: ['w0'] }]);
+  assert.deepEqual(Object.keys(overrides(speech(), [select(0, 4)])['media-0']), ['w0', 'w4', 'w8'], 'one range can address several phrases');
+  // The whole phrase is used: a range around one word's middle misses a phrase whose own middle is elsewhere, and one around the phrase middle covers all its words.
+  assert.throws(() => overrides(speech(), [select(0.1, 0.2)]), error => error.details.field === 'captions.lines.0');
+  assert.deepEqual(Object.keys(overrides(speech(), [select(0.45, 0.55)])['media-0']), ['w0']);
+  // [from, to): a phrase whose middle is exactly to is outside, at from it is inside.
+  const middle = (1.2 + 2.2) / 2;
+  assert.deepEqual(Object.keys(overrides(speech(), [select(middle, 3)])['media-0']), ['w4']);
+  assert.throws(() => overrides(speech(), [select(1.3, middle)]), error => error.details.field === 'captions.lines.0');
+  // A trimmed clip only addresses the phrases it plays.
+  const trimmed = speech({}, [{ track: 'v1', path: '/speech.mp4', in: 1.8, out: 4 }]);
+  assert.deepEqual(Object.keys(overrides(trimmed, [select(0, 4)])['media-0']), ['w8']);
+  assert.throws(() => overrides(trimmed, [select(0, 1.8)]), error => error.details.field === 'captions.lines.0');
+  // Corrections come first: "worked." gains a sentence-ending word that becomes its own phrase.
+  const corrected = speech();
+  corrected.transcripts['media-0'] = correctTranscript(phraseWords, [{ from: 'worked.', to: 'worked. now.' }]);
+  const own = Object.keys(overrides(corrected, [select(2, 2.2)])['media-0']);
+  assert.equal(own.length, 1);
+  assert.notEqual(own[0], 'w4');
+  assert.deepEqual(Object.keys(overrides(corrected, [select(1.5, 1.7)])['media-0']), ['w4']);
+  // Rows merge in request order with the reducer's line patch; a later style drops an earlier Mixed recipe, and zero rotation is no override.
+  const first = selectors => overrides(speech(), selectors)['media-0'].w0;
+  assert.deepEqual(first([select(0, 4, { x: 0.2, style: 'boxed' }), select(0, 4, { x: 0.3, rotation: 5 })]), { x: 0.3, style: 'boxed', rotation: 5 });
+  assert.deepEqual(first([select(0, 1, { style: 'mixed' })]), { style: 'mixed', mix: DEFAULT_MIX });
+  assert.deepEqual(first([select(0, 1, { style: 'mixed' }), select(0, 1, { style: 'boxed' })]), { style: 'boxed' });
+  assert.deepEqual(first([select(0, 1, { style: 'mixed', mix: { preset: 'editorial', seed: 3 } })]).mix, { preset: 'editorial', seed: 3, palette: ['#FAF3E0', '#F2C14E', '#FF7B6B'] });
+  assert.deepEqual(overrides(speech(), [select(0, 1, { rotation: 0 })]), {});
+  // No match, a missing transcript, a V2 or missing clip and a photo each name their row.
+  const twoClips = [{ track: 'v1', path: '/speech.mp4' }, { track: 'v2', start: 0, path: '/reference.mp4' }];
+  const silent = speech();
+  delete silent.transcripts['media-0'];
+  const photoDocument = editDocument({ ...input([{ track: 'v1', path: '/a.png' }]), captions: { style: 'clean', ...PLACEMENT } }, [{ id: 'media-0', kind: 'photo', source: { width: 100, height: 100 }, poster: '', hasAudio: false }]);
+  for (const [state, selectors, field] of [
+    [speech(), [select(3.9, 4)], 'captions.lines.0'],
+    [speech(), [select(0, 1), select(3.9, 4)], 'captions.lines.1'],
+    [silent, [select(0, 4)], 'captions.lines.0'],
+    [speech({}, twoClips), [select(0, 1, { x: 0.3 }, 1)], 'captions.lines.0.clip'],
+    [speech(), [select(0, 1, { x: 0.3 }, 7)], 'captions.lines.0.clip'],
+    [photoDocument, [select(0, 1)], 'captions.lines.0.clip'],
+  ]) assert.throws(() => applyLineSelectors(state, selectors), error => error.details.field === field, field);
+});
+
+test('every selector must still reach a visible phrase after the clip switches and the rapid intro', () => {
+  const five = Array.from({ length: 5 }, () => ({ track: 'v1', path: '/speech.mp4' }));
+  const select = clip => ({ clip, from: 0, to: 1, x: 0.3 });
+  const { state, matches } = applyLineSelectors(speech({}, five), [select(2)]);
+  assert.doesNotThrow(() => checkVisibleLines(state, matches));
+  // The teaser cuts carry no captions, but the body clip still shows the phrase.
+  const intro = applyRapidIntro(state, { clips: [0, 1, 2, 3, 4], labels: [0, 1, 2, 3, 4].map(clip => ({ clip, text: `Step ${clip}` })) });
+  assert.doesNotThrow(() => checkVisibleLines(intro, matches));
+  const off = applyLineSelectors(speech({}, five.map((clip, index) => index === 2 ? { ...clip, captions_enabled: false } : clip)), [select(2)]);
+  assert.throws(() => checkVisibleLines(off.state, off.matches), error => error.details.field === 'captions.lines.0');
+  assert.throws(() => checkVisibleLines(state, [...matches, { mediaId: 'media-2', phraseIds: ['gone'] }]), error => error.details.field === 'captions.lines.1');
+});
+
+test('caption classification before any speech is read follows Studio: geometry is free, merged expressive styles, Scatter pools and word styles are Pro', () => {
+  const free = ['clean', 'boxed', 'minimal'];
+  const select = (from, to, extra) => ({ clip: 0, from, to, ...extra });
+  const word = appearance => ({ clip: 0, from: 0, to: 1, appearance });
+  const rows = [
+    [{}, 'clean', false],
+    [{ lines: [select(0, 4, { x: 0.2, y: 0.3, size: 0.05, rotation: -4 })] }, 'clean', false],
+    [{ lines: [select(0, 4, { style: 'boxed' }), select(0, 4, { style: 'minimal' })] }, 'clean', false],
+    [{ lines: [select(0, 4, { style: 'editorial' })] }, 'clean', true],
+    [{ lines: [select(0, 4, { style: 'mixed' })] }, 'clean', true],
+    [{ lines: [select(0, 4, { style: 'editorial' }), select(0, 4, { style: 'clean' })] }, 'clean', false],
+    [{ lines: [select(0, 4, { style: 'editorial' }), select(1, 4, { style: 'clean' })] }, 'clean', true],
+    [{ lines: [select(0, 4, { style: 'editorial' }), select(1, 2, { rotation: 3 })] }, 'clean', true],
+    [{ lines: [select(0, 4, { style: 'editorial' }), select(0, 4, { style: 'mixed' }), select(0, 4, { style: 'boxed' })] }, 'clean', false],
+    [{ lines: [select(0, 4, { style: 'karaoke' })] }, 'karaoke', false],
+    [{ lines: [select(0, 4, { style: 'editorial' })] }, 'karaoke', true],
+    [{ lines: [select(0, 4, { style: 'clean' })] }, 'editorial', false],
+    [{ scatter: { ...SCATTER, styles: ['clean', 'boxed', 'minimal'] } }, 'clean', false],
+    [{ scatter: { ...SCATTER, styles: ['clean', 'editorial'] } }, 'clean', true],
+    [{ scatter: { ...SCATTER, styles: ['mixed'] } }, 'clean', true],
+    [{ scatter: { ...SCATTER, styles: ['karaoke', 'clean'] } }, 'karaoke', false],
+    [{ scatter: { ...SCATTER, styles: ['karaoke', 'neon'] } }, 'karaoke', true],
+    [{ scatter: { ...SCATTER, styles: ['clean'] }, lines: [select(0, 4, { x: 0.5 })] }, 'clean', false],
+    [{ word_styles: [word({ underline: true })] }, 'clean', true],
+    [{ word_styles: [word({ underline: false })], lines: [select(0, 4, { x: 0.5 })] }, 'clean', false],
+  ];
+  for (const [extra, style, customized] of rows) {
+    const captions = { style, ...PLACEMENT, ...extra };
+    assert.equal(captionsCustomized(captions), customized, JSON.stringify(extra));
+    if (extra.lines === undefined || extra.scatter !== undefined || extra.word_styles !== undefined) continue;
+    // For line selectors alone the reducer's merged overrides agree.
+    const merged = Object.values(applyLineSelectors(speech({ style }), extra.lines).state.lineOverrides['media-0'] ?? {});
+    assert.equal(merged.some(override => override.style !== undefined && override.style !== style && !free.includes(override.style)), customized, `Studio agrees: ${JSON.stringify(extra)}`);
   }
 });
 

@@ -13,7 +13,7 @@ import { closestVideoAspect, compositeSize, overlayStartLimit, pictureSize, type
 export type Format = "mp4" | "mov" | "webm";
 export type Artifact = { path: string; mime_type: string; bytes: number; duration_seconds: number };
 export type RenderInput = { configuration: string; format?: Format; output_dir?: string; output_path?: string; video_path?: string; start_seconds?: number };
-export type Update = (state: "downloading_browser" | "downloading_speech_model" | "preparing_captions" | "rendering" | "compositing" | "preparing_people_model" | "preparing_people_masks", progress: number) => void;
+export type Update = (state: "downloading_browser" | "downloading_speech_model" | "preparing_captions" | "placing_captions" | "rendering" | "compositing" | "preparing_people_model" | "preparing_people_masks", progress: number) => void;
 export async function recordHistory(config: Configured, free: boolean): Promise<string[]> {
   try {
     if (free && !(await accountStatus()).pro) return [];
@@ -122,7 +122,8 @@ export async function render(input: RenderInput, signal: AbortSignal, update: Up
     await track("mcp_render", { family, free, kind, outcome: "success" });
     return { artifact, warnings, ...(aspect === undefined ? {} : { aspect }) };
   } catch (error) {
-    await track("mcp_render", { family, free, kind, outcome: "failure" });
+    // A canceled job is not a render failure.
+    if (!signal.aborted) await track("mcp_render", { family, free, kind, outcome: "failure" });
     throw error;
   } finally { if (work !== undefined) await rm(work, { recursive: true, force: true }); }
 }

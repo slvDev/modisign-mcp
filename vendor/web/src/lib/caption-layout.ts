@@ -1,5 +1,5 @@
 // generated from the Modisign monorepo, do not edit
-import { captionDisplayText, captionStyle, resolveLook, type CaptionLine, type CaptionPlacement, type CaptionStyleId, type ResolvedLook } from "./captions";
+import { captionDisplayText, captionStyle, resolveLook, type CaptionLine, type CaptionStyle, type LineTreatment, type ResolvedLook } from "./captions";
 import { CAPTION_FONTS } from "./caption-mix";
 
 export type CaptionRect = { x: number; y: number; width: number; height: number };
@@ -37,12 +37,27 @@ export function trackedWidth(text: string, size: number, face: CaptionFace, trac
 }
 // Only a face with a real italic may slant; no word is ever synthesized.
 export const italicFace = (face: CaptionFace): CaptionFace => CAPTION_FONTS[face.font].italic ? { ...face, italic: true } : face;
-export function captionLayout(line: CaptionLine, styleId: CaptionStyleId, time: number, width: number, height: number, placement: CaptionPlacement, measure: CaptionMeasure) {
-  const style = captionStyle(styleId);
+export type CaptionPoint = { x: number; y: number };
+const SIZE_FRACTIONS = { s: 0.037, m: 0.048, l: 0.063 } as const;
+// A line's nominal font height in output pixels: a number is a fraction of the shorter side, S/M/L are width-relative.
+export const captionSizePixels = (size: LineTreatment["size"], width: number, height: number) => typeof size === "number" ? Math.min(width, height) * size : width * SIZE_FRACTIONS[size];
+// Ink beyond the text rectangles, as a fraction of the font size: stroke, shadow and glow blur, and the word highlight box.
+function paintPadding(style: CaptionStyle) {
+  const shadow = style.shadow === null ? 0 : style.shadow.blur + style.shadow.offset;
+  return Math.max(0.06, style.stroke === null ? 0 : style.stroke.width / 2 + 0.03, shadow + 0.04, style.glow ? 0.6 : 0, style.background === "word" ? 0.3 : 0);
+}
+const rotated = (point: CaptionPoint, center: CaptionPoint, radians: number): CaptionPoint => ({
+  x: center.x + (point.x - center.x) * Math.cos(radians) - (point.y - center.y) * Math.sin(radians),
+  y: center.y + (point.x - center.x) * Math.sin(radians) + (point.y - center.y) * Math.cos(radians),
+});
+// Time-independent for a line except the words' reveal state; every rectangle is in output pixels before the block's rotation about `center`.
+export function captionLayout(line: CaptionLine, time: number, width: number, height: number, measure: CaptionMeasure) {
+  const { treatment } = line;
+  const style = captionStyle(treatment.style);
   const texts = line.words.map(({ text }) => captionDisplayText(text, style.casing));
   const looks = line.words.map(({ look }) => resolveLook(style, look));
   const maxScale = Math.max(style.activeScale, style.motion === "pop" ? 1.08 : 1);
-  let size = width * ({ s: 0.037, m: 0.048, l: 0.063 }[placement.size]) * (style.motion === "word" ? 1.6 : 1);
+  let size = captionSizePixels(treatment.size, width, height) * (style.motion === "word" ? 1.6 : 1);
   const base: CaptionFace = { font: style.font, weight: style.weight, italic: false };
   let rows: number[][] = [];
   let widths: number[] = [];
@@ -61,15 +76,26 @@ export function captionLayout(line: CaptionLine, styleId: CaptionStyleId, time: 
   }
   wrap();
   while (rows.length > 2 || widths.some((value) => value > width * 0.86)) { size *= 0.9; wrap(); }
-  const anchor = height * ({ upper: 0.18, center: 0.5, lower: 0.7 }[placement.position]);
   // A row is as tall as its most open word; with no leading overrides every row is 1.35 × size.
   const rowHeights = rows.map((row) => size * Math.max(...row.map((i) => looks[i].leading)));
   const total = rowHeights.reduce((sum, value) => sum + value, 0);
-  const box = { y: anchor - total / 2, height: total };
+  const rowWidths = rows.map((row) => row.reduce((sum, i) => sum + widths[i], 0) + space * (row.length - 1));
+  const extent = Math.max(...rowWidths);
+  const pad = size * paintPadding(style);
+  const backingWidth = style.background === "line" ? extent + size * 0.8 : 0;
+  const radians = treatment.rotation * Math.PI / 180;
+  // The block is placed about its centre; its rotated paint bound is then kept inside the frame.
+  const half = { x: Math.max(extent, backingWidth) / 2 + pad, y: total / 2 + pad };
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => rotated({ x: sx * half.x, y: sy * half.y }, { x: 0, y: 0 }, radians));
+  const wanted = { x: width * treatment.x, y: height * treatment.y };
+  const [lowX, highX, lowY, highY] = [Math.min(...corners.map((c) => c.x)), Math.max(...corners.map((c) => c.x)), Math.min(...corners.map((c) => c.y)), Math.max(...corners.map((c) => c.y))];
+  const fit = (at: number, low: number, high: number, limit: number) => at + low < 0 ? -low : at + high > limit ? limit - high : at;
+  const center = { x: fit(wanted.x, lowX, highX, width), y: fit(wanted.y, lowY, highY, height) };
+  const box = { x: center.x - extent / 2, y: center.y - total / 2, width: extent, height: total };
   const words: CaptionLayoutWord[] = [];
   let top = box.y;
   rows.forEach((row, rowIndex) => {
-    let x = (width - row.reduce((sum, i) => sum + widths[i], 0) - space * (row.length - 1)) / 2;
+    let x = center.x - rowWidths[rowIndex] / 2;
     const y = top + rowHeights[rowIndex] / 2;
     top += rowHeights[rowIndex];
     for (const i of row) {
@@ -86,6 +112,7 @@ export function captionLayout(line: CaptionLine, styleId: CaptionStyleId, time: 
       x += widths[i] + space;
     }
   });
+  const backing: CaptionRect | null = backingWidth === 0 ? null : { x: center.x - backingWidth / 2, y: box.y, width: backingWidth, height: total };
   const lastSpoken = words.filter(({ index }) => time >= line.words[index].start).at(-1);
   let highlight: CaptionRect | null = null;
   if (style.background === "word" && lastSpoken !== undefined) {
@@ -100,5 +127,7 @@ export function captionLayout(line: CaptionLine, styleId: CaptionStyleId, time: 
     x: lastVisible.x + trackedWidth(lastVisible.text, size, { font: lastVisible.font, weight: lastVisible.weight, italic: false }, lastVisible.tracking, measure) + size * 0.1,
     y: lastVisible.y, width: size * 0.035, height: size,
   } : null;
-  return { size, anchor, box, rows, words, highlight, caret };
+  // The padded paint bound before rotation, and its corners after it: what handles, safe zones and collision checks use.
+  const bound: CaptionRect = { x: center.x - half.x, y: center.y - half.y, width: half.x * 2, height: half.y * 2 };
+  return { size, anchor: center.y, center, rotation: radians, box, rows, words, backing, highlight, caret, bound, corners: corners.map((corner) => ({ x: center.x + corner.x, y: center.y + corner.y })) };
 }

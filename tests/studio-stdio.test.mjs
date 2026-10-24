@@ -35,7 +35,7 @@ test('stdio advertises explicit tracks and returns field errors without acceptin
     }
     // Mixed captions are discoverable, and every malformed mix or word style fails with its field before any media is read.
     const captions = tools.find(tool => tool.name === 'edit_video').inputSchema.properties.captions;
-    assert.deepEqual(Object.keys(captions.properties).sort(), ['corrections', 'mix', 'position', 'size', 'style', 'word_styles']);
+    assert.deepEqual(Object.keys(captions.properties).sort(), ['corrections', 'grouping', 'lines', 'mix', 'position', 'scatter', 'size', 'style', 'word_styles']);
     assert.ok(captions.properties.style.enum.includes('mixed'));
     assert.deepEqual(captions.properties.mix.properties.preset.enum, ['creator', 'editorial']);
     assert.deepEqual(captions.properties.mix.required, ['preset']);
@@ -54,6 +54,10 @@ test('stdio advertises explicit tracks and returns field errors without acceptin
       [{ style: 'clean', ...placement, word_styles: [word({}, { font: 'sans', weight: 600 })] }, 'appearance'],
       [{ style: 'clean', ...placement, word_styles: [word({ clip: 1 })] }, 'clip', twoClips],
       [{ style: 'clean', ...placement, word_styles: [word({ from: 1, to: 1 })] }, 'word_styles'],
+      [{ style: 'clean', ...placement, lines: [{ clip: 0, from: 1, to: 1, x: 0.3 }] }, 'captions.lines.0'],
+      [{ style: 'clean', ...placement, lines: [{ clip: 0, from: 0, to: 1 }] }, 'captions.lines.0'],
+      [{ style: 'clean', ...placement, lines: [{ clip: 1, from: 0, to: 1, x: 0.3 }] }, 'captions.lines.0.clip', twoClips],
+      [{ style: 'clean', ...placement, lines: [{ clip: 0, from: 0, to: 1, style: 'boxed', mix: { preset: 'creator' } }] }, 'captions.lines.0.mix'],
     ]) {
       const result = await client.callTool({ name: 'edit_video', arguments: { clips, aspect: '9x16', captions: caption } });
       assert.equal(result.isError, true, JSON.stringify(caption));
@@ -66,12 +70,22 @@ test('stdio advertises explicit tracks and returns field errors without acceptin
     assert.deepEqual(Object.keys(edit.inputSchema.properties.texts.items.properties).sort(), ['backing', 'clip', 'duration', 'fill', 'font', 'italic', 'motion', 'occlusion', 'reveal', 'size', 'start', 'text', 'timestamp', 'weight', 'x', 'y']);
     assert.deepEqual(edit.inputSchema.properties.texts.items.properties.timestamp.enum, ['source', 'timeline']);
     const rapid = edit.inputSchema.properties.rapid_intro;
-    assert.deepEqual(Object.keys(rapid.properties).sort(), ['clips', 'frames_per_clip', 'labels', 'mute_teasers', 'timestamp']);
+    assert.deepEqual(Object.keys(rapid.properties).sort(), ['captions_on_teasers', 'clips', 'frames_per_clip', 'labels', 'mute_teasers', 'timestamp']);
     assert.deepEqual(rapid.required, ['clips', 'labels']);
     assert.deepEqual([rapid.properties.clips.minItems, rapid.properties.clips.maxItems], [5, 7]);
     assert.deepEqual(rapid.properties.frames_per_clip.enum, [3, 4, 5, 6]);
     assert.deepEqual(rapid.properties.timestamp.enum, ['source', 'timeline', 'none']);
     for (const phrase of ['five-frame rapid intro from grind.mp4, pour.mp4, stir.mp4, steam.mp4 and serve.mp4', 'source timestamps', 'Grind beans', 'never looks at pictures', 'never invent them from file names', '3 frames (0.1 seconds)', 'moves later by the intro length']) assert.ok(edit.description.includes(phrase), phrase);
+    // Caption lines, grouping and Scatter are discoverable with the shared bounds, and the description carries the one-call example, the whole-phrase rule and the Pro rule.
+    const { lines, grouping, scatter } = captions.properties;
+    assert.deepEqual([Object.keys(lines.items.properties).sort(), lines.items.required, lines.maxItems], [['clip', 'from', 'mix', 'rotation', 'size', 'style', 'to', 'x', 'y'], ['clip', 'from', 'to'], 100]);
+    assert.deepEqual([lines.items.properties.size.minimum, lines.items.properties.size.maximum, lines.items.properties.rotation.minimum, lines.items.properties.rotation.maximum], [0.02, 0.14, -30, 30]);
+    assert.deepEqual([Object.keys(grouping.properties), grouping.required], [['max_words', 'max_characters', 'max_duration', 'pause'], ['max_words', 'max_characters', 'max_duration', 'pause']]);
+    assert.deepEqual([grouping.properties.max_words.maximum, grouping.properties.max_characters.minimum, grouping.properties.max_duration.maximum, grouping.properties.pause.minimum], [12, 8, 30, 0.1]);
+    assert.deepEqual([Object.keys(scatter.properties), scatter.required, scatter.properties.safe_zone.enum, scatter.properties.intensity.enum, scatter.properties.styles.minItems, scatter.properties.styles.uniqueItems],
+      [['seed', 'safe_zone', 'intensity', 'styles'], ['seed', 'safe_zone', 'intensity', 'styles'], ['social', 'frame'], ['subtle', 'normal'], 1, true]);
+    assert.equal(edit.inputSchema.properties.clips.items.properties.captions_enabled.type, 'boolean');
+    for (const phrase of ['every whole phrase whose middle', 'a range covers whole phrases by their middle', 'is an error naming it', 'tell the user before rendering', 'using Scatter seed 58 with free styles', 'scatter: {seed: 58, safe_zone: "social", intensity: "normal", styles: ["clean", "boxed", "minimal"]}', 'captions_on_teasers is true', 'clean, boxed, minimal']) assert.ok(JSON.stringify(edit).includes(phrase.replaceAll('"', '\\"')), phrase);
     // Motion is discoverable on clips, titles and overlays with one shared row shape, units and bounds, and its time bases and Pro rule are described.
     const layers = { clip: edit.inputSchema.properties.clips.items.properties.motion, title: edit.inputSchema.properties.texts.items.properties.motion, overlay: edit.inputSchema.properties.overlays.items.properties.motion };
     const bounds = { x: [-2, 2], y: [-2, 2], scale: [0.1, 5], rotation: [-3600, 3600], opacity: [0, 1] };
@@ -133,6 +147,9 @@ test('stdio advertises explicit tracks and returns field errors without acceptin
       [{ rapid_intro: { clips: [0, 1, 2, 3, 4], labels: labels.slice(1) } }, 'labels'],
       [{ rapid_intro: { clips: [0, 1, 2, 3, 4], labels, frames_per_clip: 7 } }, 'frames_per_clip'],
       [{ rapid_intro: { clips: [0, 1, 2, 3, 4], labels, timestamp: 'output' } }, 'timestamp'],
+      [{ rapid_intro: { clips: [0, 1, 2, 3, 4], labels, captions_on_teasers: true } }, 'rapid_intro.captions_on_teasers'],
+      [{ clips: [{ path: '/missing.mp4', track: 'v2', start: 0, captions_enabled: false }], captions: { style: 'clean', position: 'lower', size: 'm' } }, 'clips.0.captions_enabled'],
+      [{ clips: [{ path: '/missing.mp4', track: 'v1', captions_enabled: false }] }, 'clips.0.captions_enabled'],
       [{ clips: [{ path: '/missing.mp4', track: 'v1', motion: { scale: [{ at: 0, value: 9, easing: 'linear' }] } }] }, 'motion'],
       [{ texts: [{ text: 'Hi', clip: 0, motion: { opacity: [{ at: 0, value: 1, easing: 'bounce' }] } }] }, 'motion'],
       [{ overlays: [{ configuration: '/overlays/hook-title?setup=x', start: 0, motion: { x: [] } }] }, 'motion'],

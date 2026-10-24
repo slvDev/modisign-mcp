@@ -15,12 +15,17 @@ import { synchronizedRanges } from "@/lib/studio-range-edit";
 import type { ClipSilence } from "@/lib/studio-silences";
 
 import { timelineWords, replaceCaptionWords, type CaptionWord, type CaptionSettings, type CaptionStyleId, type CaptionPlacement, type WordStyles } from "@/lib/captions";
+import { groupingOf, groupPhrases, joinPhrases, patchedLine, phraseKey, phrasesAfterDelete, phrasesAfterEdit, phrasesFor, prunedLineOverrides, splitPhrase, type CaptionLineOverrides, type CaptionPhrases, type LinePatch, type ScatterPlan } from "@/lib/caption-lines";
+import { scatterRevision } from "@/lib/caption-scatter";
 import { patchedLook, type CaptionMix, type WordAppearance, type WordPatch } from "@/lib/caption-mix";
 import { occlusionOverlaps, textProblem, type StudioText, type TextPatch } from "@/lib/studio-text";
 import { rapidIntro, type RapidIntroInput } from "@/lib/studio-rapid-intro";
 import { documentSfx, movedSfx, projectSfx, retargetedSfx, settledSfx, sfxProblem, type StudioSfx, type SfxPatch } from "@/lib/studio-sfx";
 import { AUTO_SFX_STALE, appliedAutoSfx, autoSfxRevision, type AutoSfxAction } from "@/lib/studio-sfx-auto";
-import { MAX_STUDIO_SFX } from "@/lib/studio-project";
+import { MAX_STUDIO_SFX, isCaptionScatter, type CaptionScatter } from "@/lib/studio-project";
+
+const MAX_LINE_OVERRIDES = 1000;
+const MAX_CAPTION_AUTHORING_BYTES = 64 * 1024;
 
 export const STUDIO_FORMATS = [...STUDIO_ASPECTS];
 export { MAX_STUDIO_DURATION, MIN_CLIP_DURATION } from "@/lib/studio-project";
@@ -29,7 +34,7 @@ export const OVERLAY_DRAG = "application/x-modisign-overlay";
 import type { OwnPhoto } from "@/lib/studio-photo";
 
 export type StudioMedia = ({ kind: "video"; source: OwnVideo } | { kind: "photo"; source: OwnPhoto }) & { id: string; poster: string; hasAudio: boolean };
-export type StudioClip = ClipSpatial & TrackPlacement & { id: string; mediaId: string | null; label: string; kind: "video" | "photo"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; sourceStart?: number; punchIns?: PunchIn[]; transition?: ClipTransition & { to: string }; motion?: LayerMotion };
+export type StudioClip = ClipSpatial & TrackPlacement & { id: string; mediaId: string | null; label: string; kind: "video" | "photo"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; sourceStart?: number; punchIns?: PunchIn[]; transition?: ClipTransition & { to: string }; motion?: LayerMotion; captionEnabled?: false };
 export type StudioFamily = ConfigFamily & { id: FamilyId; name: string; cues: Cue[]; looks: Look[]; freeConfigs: TemplateConfig[] };
 // MCP builds its overlay preset without the library tile, which only the Studio picker draws.
 export type StudioOverlay = { id: string; preset: Omit<CatalogItem, "studioStill">; family: StudioFamily; config: TemplateConfig; start: number; clamped: boolean; motion?: LayerMotion };
@@ -49,7 +54,8 @@ export function overlayConfig(family: StudioFamily, href: string) {
 export type StudioSelection = { kind: "clip"; id: string; ids: string[] } | { kind: "overlay"; id: string } | { kind: "text"; id: string } | { kind: "sfx"; id: string } | null;
 export type StudioDocument = {
   media: StudioMedia[]; clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[]; sfx: StudioSfx[];
-  transcripts: Record<string, CaptionWord[]>; wordStyles: WordStyles; captions: CaptionSettings | null; savedCaptionSettings: CaptionSettings | null;
+  transcripts: Record<string, CaptionWord[]>; wordStyles: WordStyles; captionPhrases: CaptionPhrases; lineOverrides: CaptionLineOverrides; scatterPlan: ScatterPlan | null;
+  captions: CaptionSettings | null; savedCaptionSettings: CaptionSettings | null;
   aspect: Aspect; aspectChosen: boolean; selection: StudioSelection;
 };
 export type StudioState = StudioDocument & {
@@ -60,7 +66,7 @@ export type StudioState = StudioDocument & {
 };
 export const initialStudioState: StudioState = {
   projectName: "Untitled edit",
-  media: [], clips: [], overlays: [], texts: [], sfx: [], transcripts: {}, wordStyles: {}, captions: null, savedCaptionSettings: null, aspect: "9x16", aspectChosen: false,
+  media: [], clips: [], overlays: [], texts: [], sfx: [], transcripts: {}, wordStyles: {}, captionPhrases: {}, lineOverrides: {}, scatterPlan: null, captions: null, savedCaptionSettings: null, aspect: "9x16", aspectChosen: false,
   selection: null, playhead: 0, seek: 0, playing: false, message: null,
   snapping: true, past: [], future: [], editGroup: null, editFuture: null,
 };
@@ -69,6 +75,15 @@ export type StudioAction =
   | { type: "set-transcript"; mediaId: string; words: CaptionWord[] }
   | { type: "edit-caption-line"; mediaId: string; wordIds: string[]; text: string }
   | { type: "delete-caption-line"; mediaId: string; wordIds: string[] }
+  | { type: "set-caption-line"; mediaId: string; phraseId: string; patch: LinePatch; group?: string }
+  | { type: "reset-caption-line"; mediaId: string; phraseId: string }
+  | { type: "reset-all-caption-lines" }
+  | { type: "split-caption-line"; mediaId: string; phraseId: string; wordId: string; newId: string }
+  | { type: "join-caption-line"; mediaId: string; phraseId: string }
+  | { type: "set-caption-grouping"; grouping: CaptionSettings["grouping"] | null }
+  | { type: "set-clip-captions"; id: string; enabled: boolean }
+  | { type: "set-caption-scatter"; scatter: CaptionScatter | null; plan: ScatterPlan | null }
+  | { type: "apply-caption-plan"; plan: ScatterPlan }
   | { type: "set-caption-style"; style: CaptionStyleId; mix?: CaptionMix }
   | { type: "style-caption-words"; mediaId: string; wordIds: string[]; patch: WordPatch }
   | { type: "reset-caption-words"; mediaId: string; wordIds: string[] }
@@ -328,14 +343,26 @@ function removeSilences(state: StudioState, ranges: ClipSilence[]): StudioState 
     sfx: retargetedSfx(movedSfx(state.sfx, move), next.clips, owners) };
 }
 function captionSettings(settings: CaptionSettings, patch: Partial<CaptionSettings>): CaptionSettings {
-  const { style, position, size } = { ...settings, ...patch };
+  const { style, position, size, grouping, scatter } = { ...settings, ...patch };
   const mix = patch.style === undefined ? settings.mix : patch.mix;
   if ((style === "mixed") !== (mix !== undefined)) throw new Error("The Mixed style needs a mix, and no other style has one");
-  return { style, position, size, ...(mix === undefined ? {} : { mix }) };
+  return { style, position, size, ...(mix === undefined ? {} : { mix }), ...(grouping === undefined ? {} : { grouping }), ...(scatter === undefined ? {} : { scatter }) };
 }
 function editCaptionSettings(state: StudioState, patch: Partial<CaptionSettings>) {
   if (state.captions !== null) return edited({ ...state, captions: captionSettings(state.captions, patch) });
   return state.savedCaptionSettings === null ? state : edited({ ...state, savedCaptionSettings: captionSettings(state.savedCaptionSettings, patch) });
+}
+const DEFAULT_CAPTIONS: CaptionSettings = { style: "clean", position: "lower", size: "m" };
+const activeGrouping = (state: StudioState) => groupingOf(state.captions !== null ? state.captions : state.savedCaptionSettings !== null ? state.savedCaptionSettings : DEFAULT_CAPTIONS);
+// Phrases and line overrides follow the transcript: each keeps only what its words still have.
+function withTranscripts(state: StudioState, transcripts: StudioState["transcripts"], captionPhrases: CaptionPhrases): StudioState {
+  return { ...state, transcripts, captionPhrases, wordStyles: prunedWordStyles(state.wordStyles, transcripts), lineOverrides: prunedLineOverrides(state.lineOverrides, captionPhrases) };
+}
+// The first reason the caption authoring metadata is over its limits (1,000 line overrides, 64 KiB), or null.
+function captionAuthoringProblem(state: StudioState) {
+  const overrides = Object.values(state.lineOverrides).reduce((sum, lines) => sum + Object.keys(lines).length, 0);
+  if (overrides > MAX_LINE_OVERRIDES) return `At most ${MAX_LINE_OVERRIDES} caption lines can have their own style or position.`;
+  return new TextEncoder().encode(JSON.stringify([state.captionPhrases, state.lineOverrides])).length > MAX_CAPTION_AUTHORING_BYTES ? "The caption line edits are too large to keep. Reset some lines." : null;
 }
 // Keeps each media's overrides only for the words its transcript still has.
 function prunedWordStyles(wordStyles: WordStyles, transcripts: StudioState["transcripts"]): WordStyles {
@@ -355,21 +382,90 @@ function styleWords(state: StudioState, mediaId: string, wordIds: string[], chan
   const wordStyles = prunedWordStyles({ ...state.wordStyles, [mediaId]: looks }, state.transcripts);
   return JSON.stringify(wordStyles) === JSON.stringify(state.wordStyles) ? state : edited({ ...state, wordStyles });
 }
+// Splits a line and keeps its treatment on both halves: explicit fields and the generated pose.
+function splitCaptionLine(state: StudioState, mediaId: string, phraseId: string, wordId: string, newId: string): StudioState {
+  const split = splitPhrase(phrasesFor(state, mediaId, activeGrouping(state)), state.transcripts[mediaId], phraseId, wordId, newId);
+  if (typeof split === "string") return { ...state, message: split };
+  const own = state.lineOverrides[mediaId] === undefined ? undefined : state.lineOverrides[mediaId][phraseId];
+  const pose = state.scatterPlan === null ? undefined : state.scatterPlan.poses[phraseKey(mediaId, phraseId)];
+  return edited({ ...state, captionPhrases: { ...state.captionPhrases, [mediaId]: split },
+    lineOverrides: own === undefined ? state.lineOverrides : { ...state.lineOverrides, [mediaId]: { ...state.lineOverrides[mediaId], [newId]: own } },
+    scatterPlan: state.scatterPlan === null || pose === undefined ? state.scatterPlan : { ...state.scatterPlan, poses: { ...state.scatterPlan.poses, [phraseKey(mediaId, newId)]: pose } } });
+}
+// The next line joins this one and the first keeps its treatment.
+function joinCaptionLine(state: StudioState, mediaId: string, phraseId: string): StudioState {
+  const joined = joinPhrases(phrasesFor(state, mediaId, activeGrouping(state)), phraseId);
+  if (typeof joined === "string") return { ...state, message: joined };
+  return edited({ ...state, captionPhrases: { ...state.captionPhrases, [mediaId]: joined.phrases }, lineOverrides: prunedLineOverrides(state.lineOverrides, { ...state.captionPhrases, [mediaId]: joined.phrases }) });
+}
+const STALE_PLAN = "The edit changed while caption placement was prepared. Prepare it again.";
+
+// One undoable recipe change: the recipe and the plan made for it replace the current ones together (a plan for other inputs is refused, null clears it); before captions exist the recipe is staged with the saved preferences.
+function setScatter(state: StudioState, scatter: CaptionScatter | null, plan: ScatterPlan | null): StudioState {
+  if (scatter !== null && !isCaptionScatter(scatter)) return { ...state, message: "That Scatter recipe is not valid." };
+  if (scatter === null && plan !== null) return { ...state, message: "A plan needs a Scatter recipe." };
+  const current = state.captions !== null ? state.captions : state.savedCaptionSettings !== null ? state.savedCaptionSettings : DEFAULT_CAPTIONS;
+  const rest = without(current, "scatter");
+  const settings: CaptionSettings = scatter === null ? rest : { ...rest, scatter };
+  if (state.captions === null) {
+    if (plan !== null) return { ...state, message: "Generate captions before placing them." };
+    return JSON.stringify(state.savedCaptionSettings) === JSON.stringify(settings) ? state : edited({ ...state, message: null, savedCaptionSettings: settings });
+  }
+  if (plan !== null && plan.revision !== scatterRevision({ ...state, captions: settings })) return { ...state, message: STALE_PLAN };
+  return edited({ ...state, message: null, captions: settings, scatterPlan: plan });
+}
+function patchLine(state: StudioState, mediaId: string, phraseId: string, patch: LinePatch): StudioState {
+  const phrases = phrasesFor(state, mediaId, activeGrouping(state));
+  if (!phrases.some((phrase) => phrase.id === phraseId)) return { ...state, message: "That caption line no longer exists." };
+  const existing = state.lineOverrides[mediaId] === undefined ? undefined : state.lineOverrides[mediaId][phraseId];
+  const next = patchedLine(existing, patch);
+  if (typeof next === "string") return { ...state, message: next };
+  if (JSON.stringify(next) === JSON.stringify(existing)) return state;
+  const lines = { ...state.lineOverrides[mediaId] };
+  if (next === undefined) delete lines[phraseId]; else lines[phraseId] = next;
+  return edited({ ...state, message: null, captionPhrases: { ...state.captionPhrases, [mediaId]: phrases }, lineOverrides: Object.keys(lines).length === 0 ? without(state.lineOverrides, mediaId) : { ...state.lineOverrides, [mediaId]: lines } });
+}
 function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "undo" | "redo" }>): StudioState {
   switch (action.type) {
     case "rename-project": return { ...state, projectName: action.name };
     case "remove-silences": return state.clips.some((clip) => clip.track === "v2") ? synchronizedRemoval(state, action.ranges) : removeSilences(state, action.ranges);
     case "set-transcript": {
       if (!state.media.some((media) => media.id === action.mediaId)) return state;
-      const captions: CaptionSettings = state.captions !== null ? state.captions : state.savedCaptionSettings !== null ? state.savedCaptionSettings : { style: "clean", position: "lower", size: "m" };
-      return edited({ ...state, transcripts: { ...state.transcripts, [action.mediaId]: action.words }, wordStyles: Object.fromEntries(Object.entries(state.wordStyles).filter(([mediaId]) => mediaId !== action.mediaId)), captions, savedCaptionSettings: null });
+      const captions: CaptionSettings = state.captions !== null ? state.captions : state.savedCaptionSettings !== null ? state.savedCaptionSettings : DEFAULT_CAPTIONS;
+      return edited({ ...state, transcripts: { ...state.transcripts, [action.mediaId]: action.words }, captionPhrases: { ...state.captionPhrases, [action.mediaId]: groupPhrases(action.words, groupingOf(captions)) }, lineOverrides: without(state.lineOverrides, action.mediaId),
+        wordStyles: Object.fromEntries(Object.entries(state.wordStyles).filter(([mediaId]) => mediaId !== action.mediaId)), captions, savedCaptionSettings: null });
     }
     case "edit-caption-line":
     case "delete-caption-line": {
       const words = state.transcripts[action.mediaId];
       if (words === undefined) throw new Error("Transcript is missing");
-      const transcripts = { ...state.transcripts, [action.mediaId]: action.type === "edit-caption-line" ? replaceCaptionWords(words, action.wordIds, action.text) : words.filter((word) => !action.wordIds.includes(word.id)) };
-      return edited({ ...state, transcripts, wordStyles: prunedWordStyles(state.wordStyles, transcripts) });
+      const after = action.type === "edit-caption-line" ? replaceCaptionWords(words, action.wordIds, action.text) : words.filter((word) => !action.wordIds.includes(word.id));
+      const phrases = phrasesFor(state, action.mediaId, activeGrouping(state));
+      return edited(withTranscripts(state, { ...state.transcripts, [action.mediaId]: after }, { ...state.captionPhrases, [action.mediaId]: action.type === "edit-caption-line" ? phrasesAfterEdit(phrases, words, after, action.wordIds) : phrasesAfterDelete(phrases, action.wordIds) }));
+    }
+    case "set-caption-line": return patchLine(state, action.mediaId, action.phraseId, action.patch);
+    case "reset-caption-line": return patchLine(state, action.mediaId, action.phraseId, { x: null, y: null, size: null, rotation: null, style: null });
+    case "reset-all-caption-lines": return Object.keys(state.lineOverrides).length === 0 ? state : edited({ ...state, lineOverrides: {} });
+    case "split-caption-line": return splitCaptionLine(state, action.mediaId, action.phraseId, action.wordId, action.newId);
+    case "join-caption-line": return joinCaptionLine(state, action.mediaId, action.phraseId);
+    case "set-caption-grouping": {
+      const settings = state.captions !== null ? state.captions : state.savedCaptionSettings;
+      const wanted = action.grouping === null ? undefined : action.grouping;
+      if (settings === null || JSON.stringify(settings.grouping) === JSON.stringify(wanted)) return state;
+      const next = editCaptionSettings(state, { grouping: wanted });
+      const grouping = activeGrouping(next);
+      return { ...next, captionPhrases: Object.fromEntries(Object.entries(state.transcripts).map(([mediaId, words]) => [mediaId, groupPhrases(words, grouping)])), lineOverrides: {}, scatterPlan: null };
+    }
+    case "set-caption-scatter": return setScatter(state, action.scatter, action.plan);
+    case "apply-caption-plan": {
+      if (state.captions === null || state.captions.scatter === undefined) return { ...state, message: "Turn Scatter on before placing captions." };
+      if (action.plan.revision !== scatterRevision(state)) return { ...state, message: STALE_PLAN };
+      return state.scatterPlan !== null && JSON.stringify(state.scatterPlan) === JSON.stringify(action.plan) ? state : edited({ ...state, message: null, scatterPlan: action.plan });
+    }
+    case "set-clip-captions": {
+      const clip = required(state.clips, action.id);
+      if ((clip.captionEnabled !== false) === action.enabled) return state;
+      return edited(state, state.clips.map((item) => item.id === action.id ? action.enabled ? without(item, "captionEnabled") : { ...item, captionEnabled: false as const } : item));
     }
     case "set-caption-style": return editCaptionSettings(state, { style: action.style, mix: action.mix });
     case "style-caption-words": return styleWords(state, action.mediaId, action.wordIds, (existing) => patchedLook(existing, action.patch));
@@ -377,7 +473,7 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
     case "reset-all-caption-words": return Object.keys(state.wordStyles).length === 0 ? state : edited({ ...state, wordStyles: {} });
     case "set-caption-position": return editCaptionSettings(state, { position: action.position });
     case "set-caption-size": return editCaptionSettings(state, { size: action.size });
-    case "clear-captions": return edited({ ...state, captions: null, savedCaptionSettings: null, transcripts: {}, wordStyles: {} });
+    case "clear-captions": return edited({ ...state, captions: null, savedCaptionSettings: null, transcripts: {}, wordStyles: {}, captionPhrases: {}, lineOverrides: {}, scatterPlan: null });
     case "relink-clip": {
       const media = mediaById(state.media, action.mediaId);
       const placeholder = required(state.clips, action.id);
@@ -620,14 +716,16 @@ function applyAction(state: StudioState, action: Exclude<StudioAction, { type: "
   }
 }
 function documentOf(state: StudioState): StudioDocument {
-  const { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings } = state;
-  return { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captions, savedCaptionSettings };
+  const { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captionPhrases, lineOverrides, scatterPlan, captions, savedCaptionSettings } = state;
+  return { media, clips, overlays, texts, sfx, aspect, aspectChosen, selection, transcripts, wordStyles, captionPhrases, lineOverrides, scatterPlan, captions, savedCaptionSettings };
 }
 // The reason a project cannot be saved as it stands (title, motion key and byte limits), or null.
 export function studioBudgetProblem(state: StudioState) {
   if (state.texts.length > MAX_STUDIO_TEXTS) return `A project has at most ${MAX_STUDIO_TEXTS} titles.`;
   if (state.sfx.length > MAX_STUDIO_SFX) return `A project has at most ${MAX_STUDIO_SFX} sounds.`;
   if ([...state.clips, ...state.overlays, ...state.texts].reduce((sum, layer) => sum + motionKeyCount(layer.motion), 0) > MAX_MOTION_KEYS) return `A project has at most ${MAX_MOTION_KEYS} motion keys.`;
+  const authoring = captionAuthoringProblem(state);
+  if (authoring !== null) return authoring;
   return new TextEncoder().encode(JSON.stringify(projectOf(state, state.projectName))).length > MAX_STUDIO_PROJECT_BYTES
     ? "This project exceeds the 64 KiB save limit. Shorten overlay or title text, remove keyframes or remove clips." : null;
 }
@@ -665,12 +763,13 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
   }
   const candidate = withSettledSfx(state, applyAction(state, action));
   if (action.type === "rename-project") return preflight(candidate);
-  const changed = candidate.media !== state.media || candidate.clips !== state.clips || candidate.overlays !== state.overlays || candidate.texts !== state.texts || candidate.sfx !== state.sfx || candidate.aspect !== state.aspect || candidate.aspectChosen !== state.aspectChosen || candidate.transcripts !== state.transcripts || candidate.wordStyles !== state.wordStyles || candidate.captions !== state.captions || candidate.savedCaptionSettings !== state.savedCaptionSettings;
+  const changed = candidate.media !== state.media || candidate.clips !== state.clips || candidate.overlays !== state.overlays || candidate.texts !== state.texts || candidate.sfx !== state.sfx || candidate.aspect !== state.aspect || candidate.aspectChosen !== state.aspectChosen || candidate.transcripts !== state.transcripts || candidate.wordStyles !== state.wordStyles
+    || candidate.captionPhrases !== state.captionPhrases || candidate.lineOverrides !== state.lineOverrides || candidate.scatterPlan !== state.scatterPlan || candidate.captions !== state.captions || candidate.savedCaptionSettings !== state.savedCaptionSettings;
   if (!changed) return candidate;
   const next = preflight(candidate);
   if (next !== candidate || action.type === "open-project") return next;
-  const group = (action.type === "edit-overlay" || action.type === "edit-text" || action.type === "edit-sfx" || action.type === "edit-clip" || action.type === "set-transition" || action.type === "edit-punch-ins" || action.type === "edit-clip-spatial" || action.type === "edit-motion") && action.group !== undefined
-    ? `${action.type === "edit-motion" ? `motion:${action.target.id}` : action.id}/${action.group}` : null;
+  const group = (action.type === "edit-overlay" || action.type === "edit-text" || action.type === "edit-sfx" || action.type === "edit-clip" || action.type === "set-transition" || action.type === "edit-punch-ins" || action.type === "edit-clip-spatial" || action.type === "edit-motion" || action.type === "set-caption-line") && action.group !== undefined
+    ? `${action.type === "edit-motion" ? `motion:${action.target.id}` : action.type === "set-caption-line" ? `line:${action.mediaId}/${action.phraseId}` : action.id}/${action.group}` : null;
   return { ...next, editGroup: group, editFuture: group === null ? null : group === state.editGroup ? state.editFuture : state.future,
     past: group !== null && group === state.editGroup ? state.past : [...state.past.slice(-59), documentOf(state)], future: [] };
 }
@@ -686,7 +785,7 @@ export function projectOf(state: StudioState, name: string): StudioProject {
   const transitions = state.clips.filter((clip) => clip.track === "v1").flatMap((clip, cut) => clip.transition === undefined ? [] : [{ cut, type: clip.transition.type, duration: clip.transition.duration }]);
   const ordered = canonicalClips(state.clips);
   return { name, aspect: state.aspect,
-    ...(captions === null ? {} : { captions: { style: captions.style, position: captions.position, size: captions.size, ...(captions.mix === undefined ? {} : { mix: captions.mix }) } }),
+    ...(captions === null ? {} : { captions }),
     ...(transitions.length === 0 ? {} : { transitions }),
     ...(state.sfx.length === 0 ? {} : { sfx: projectSfx(state.sfx, { clips: ordered, texts: state.texts, overlays: state.overlays }) }),
     ...(state.texts.length === 0 ? {} : { texts: state.texts.map(({ text, timestamp, font, weight, italic, fill, size, x, y, backing, timing, motion, reveal, occlusion, animationOffset }) => {
@@ -699,9 +798,9 @@ export function projectOf(state: StudioState, name: string): StudioProject {
       return { ...label, clip };
     }) }),
     clips: ordered.map((clip) => {
-      const { label, kind, duration, inPoint, outPoint, settings, punchIns, sourceStart, crop, place, motion } = clip;
+      const { label, kind, duration, inPoint, outPoint, settings, punchIns, sourceStart, crop, place, motion, captionEnabled } = clip;
       const structure = {
-        ...(Object.values(crop).every((edge) => edge === 0) ? {} : { crop }), ...(place.mode === "full" ? {} : { place }), ...(motion === undefined ? {} : { motion }) };
+        ...(Object.values(crop).every((edge) => edge === 0) ? {} : { crop }), ...(place.mode === "full" ? {} : { place }), ...(motion === undefined ? {} : { motion }), ...(captionEnabled === false ? { captionEnabled } : {}) };
       const content = kind === "photo"
       ? { ...structure, label, kind: "photo" as const, duration: outPoint - inPoint, ...(sourceStart === undefined || sourceStart === 0 ? {} : { sourceStart }), ...(punchIns === undefined || punchIns.length === 0 ? {} : { punchIns }), settings: { frameMode: settings.frameMode, centerX: settings.centerX, centerY: settings.centerY, zoom: settings.zoom, slowZoom: settings.slowZoom === true } }
       : { ...structure, label, kind: "video" as const, duration, inPoint, outPoint, settings, ...(punchIns === undefined || punchIns.length === 0 ? {} : { punchIns }) };

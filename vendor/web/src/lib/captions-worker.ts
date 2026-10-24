@@ -21,6 +21,7 @@ wasm.wasmPaths = { mjs: runtimeBase + RUNTIME_FILES.mjs, wasm: runtimeBase + RUN
 
 const AUDIO_UNSUPPORTED = "This browser cannot decode the audio needed for captions. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.";
 const FAILED = { audio: "Audio preparation failed", model: "Speech model failed to load", inference: "Transcription failed" } as const;
+const FAILED_CODES = { audio: "audio_failed", model: "model_failed", inference: "inference_failed" } as const;
 const PROGRESS_INTERVAL_MS = 250;
 const FIRST_WINDOW_SECONDS = 28;
 const OVERLAP_SECONDS = 2;
@@ -159,9 +160,9 @@ async function transcribe({ id, file, duration }: AsrRequest) {
     if (debug) send({ type: "mark", name: "result", detail: { windows: windows.length, words: words.length } });
     send({ type: "done", id, words, audio: true });
   } catch (error) {
-    if (error instanceof AudioUnsupported) { send({ type: "error", id, message: error.message }); return; }
+    if (error instanceof AudioUnsupported) { send({ type: "error", id, message: error.message, stage: "audio", code: "unsupported_audio_decoder" }); return; }
     const reason = error instanceof Error && error.message !== "" ? error.message : "Caption generation failed.";
-    send({ type: "error", id, message: `${FAILED[stage]}: ${reason}${/[.!?]$/.test(reason) ? "" : "."} Try a shorter source video or use Studio on a computer.` });
+    send({ type: "error", id, message: `${FAILED[stage]}: ${reason}${/[.!?]$/.test(reason) ? "" : "."} Try a shorter source video or use Studio on a computer.`, stage, code: FAILED_CODES[stage] });
   } finally {
     input.dispose();
     inputsChanged(-1);

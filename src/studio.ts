@@ -7,7 +7,7 @@ import { destination, inputFile, publishFile } from "./files.js";
 import { bundle, configurationUrl, resolveConfiguration } from "./overlays.js";
 import { pictureSize } from "./own-video.js";
 import { probe, type Artifact, type Update } from "./render.js";
-import { validateEdit, mapClips, mapTexts, mapSfx, applyRapidIntro, checkRapidIntroStructure, selectorsCustomized, type EditInput, type MediaInfo } from "./studio-request.js";
+import { validateEdit, mapClips, mapTexts, mapSfx, applyRapidIntro, checkRapidIntroStructure, captionsCustomized, type EditInput, type MediaInfo } from "./studio-request.js";
 import { assetRoutes, personRoutes, studioBrowser } from "./studio-browser.js";
 import { speechModel } from "./studio-model.js";
 import { timelineDuration } from "../vendor/web/src/lib/video-timeline.js";
@@ -16,12 +16,12 @@ import { motionIsIdentity } from "../vendor/web/src/lib/studio-project.js";
 import { titleEffectsOn } from "../vendor/web/src/lib/studio-text.js";
 
 export type StudioInput = EditInput & { kind: "studio" };
-const STAGE_STATES = { model: "preparing_people_model", masks: "preparing_people_masks", captions: "preparing_captions" } as const;
+const STAGE_STATES = { model: "preparing_people_model", masks: "preparing_people_masks", captions: "preparing_captions", scatter: "placing_captions" } as const;
 // Only fixed ids and booleans leave the machine: curves, times, text and paths never do.
 const authorizationBody = (input: EditInput) => ({ kind: "studio", configurations: input.overlays === undefined ? [] : input.overlays.map((overlay) => overlay.configuration),
   overlayMotionCustomized: input.overlays !== undefined && input.overlays.some((overlay) => !motionIsIdentity(overlay.motion)),
   captionStyle: input.captions === undefined ? null : input.captions.style,
-  captionCustomized: input.captions !== undefined && input.captions.word_styles !== undefined && selectorsCustomized(input.captions.word_styles),
+  captionCustomized: input.captions !== undefined && captionsCustomized(input.captions),
   titleEffects: input.texts !== undefined && titleEffectsOn(input.texts) });
 async function authorizeStudio(input: EditInput, signal?: AbortSignal) {
   const body = authorizationBody(input);
@@ -131,7 +131,11 @@ export async function renderStudio(input: StudioInput, signal: AbortSignal, upda
     const path = await publishFile(output, desired);
     await track("mcp_render", { free, kind: "studio", outcome: "success" });
     return { artifact: { path, mime_type: "video/mp4", bytes: (await stat(path)).size, duration_seconds: result.duration }, warnings: result.warnings };
-  } catch (error) { await track("mcp_render", { free, kind: "studio", outcome: "failure" }); throw error; }
+  } catch (error) {
+    // A canceled job is not a render failure.
+    if (!signal.aborted) await track("mcp_render", { free, kind: "studio", outcome: "failure" });
+    throw error;
+  }
   finally { if (work !== undefined) await rm(work, { recursive: true, force: true }); }
 }
 export async function getTranscript(input: { path: string; in?: number; out?: number }, signal: AbortSignal) {

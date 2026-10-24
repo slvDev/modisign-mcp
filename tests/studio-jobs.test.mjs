@@ -85,9 +85,11 @@ test('two-track jobs preserve authorization privacy, output collisions and stage
       onFetch = null;
       assert.deepEqual(await readdir(output), []);
     });
-    // Cancel during speech setup leaves nothing published, for a plain style and for a Pro mixed request with word styles.
+    // Cancel during speech setup leaves nothing published, for a plain style, a Pro mixed request with word styles, an expressive line and a free Scatter.
     const placement = { position: 'lower', size: 'm' };
-    for (const [name, pro, captions] of [['clean', false, { style: 'clean', ...placement }], ['mixed', true, { style: 'mixed', ...placement, mix: { preset: 'creator', seed: 58 }, word_styles: [{ clip: 1, from: 0, to: 1, appearance: { underline: true } }] }]]) {
+    for (const [name, pro, captions] of [['clean', false, { style: 'clean', ...placement }], ['mixed', true, { style: 'mixed', ...placement, mix: { preset: 'creator', seed: 58 }, word_styles: [{ clip: 1, from: 0, to: 1, appearance: { underline: true } }] }],
+      ['lines', true, { style: 'clean', ...placement, lines: [{ clip: 1, from: 0, to: 1, style: 'editorial', x: 0.3 }] }],
+      ['scatter', false, { style: 'clean', ...placement, scatter: { seed: 58, safe_zone: 'social', intensity: 'normal', styles: ['clean', 'boxed'] } }]]) {
       await t.test(`${name} model setup cancellation cleans scratch files`, async () => {
         const reached = Promise.withResolvers();
         proAccount = pro;
@@ -122,12 +124,15 @@ test('two-track jobs preserve authorization privacy, output collisions and stage
             };
           }, codec, method);
         };
+        const before = calls.length;
         const job = await jobs.start(request(`${stage}.mp4`));
         await reached.promise;
         jobs.cancel(job.job_id);
         assert.equal((await finished(jobs, job.job_id)).state, 'canceled');
         onBrowser = null;
         assert.deepEqual(await readdir(output), []);
+        // A canceled job is not a render failure.
+        assert.equal(calls.slice(before).some(call => call.body.name === 'mcp_render'), false);
       });
     }
     await t.test('unexpected export and transcription failures hide runtime internals', async () => {
@@ -266,6 +271,120 @@ test('two-track jobs preserve authorization privacy, output collisions and stage
         assert.equal(result.state, 'failed', 'the unchanged request still passes authorization from the exact cached body');
         await assert.rejects(jobs.start(withOverlay('offline-customized.mp4', { x: [key(0, 0.1)] })), /Cannot reach Modisign/);
       } finally { offline = false; }
+    });
+    await t.test('caption lines and Scatter are classified before any speech and send only the six fixed facts at submission and dequeue', async () => {
+      const authorizations = before => calls.slice(before).filter(call => call.path === '/api/mcp/authorize').map(call => call.body);
+      const body = captionCustomized => ({ kind: 'studio', configurations: [], overlayMotionCustomized: false, captionStyle: 'clean', captionCustomized, titleEffects: false });
+      const base = { style: 'clean', ...placement };
+      const row = extra => ({ clip: 1, from: 0, to: 1, ...extra });
+      const free = [
+        { ...base, grouping: { max_words: 4, max_characters: 24, max_duration: 1.8, pause: 0.35 }, lines: [row({ x: 0.31, y: 0.42, size: 0.055, rotation: -4 }), row({ style: 'boxed' })] },
+        { ...base, scatter: { seed: 4242, safe_zone: 'frame', intensity: 'subtle', styles: ['clean', 'boxed', 'minimal'] } },
+      ];
+      const expressive = [
+        { ...base, lines: [row({ style: 'editorial' })] },
+        { ...base, lines: [row({ style: 'mixed', mix: { preset: 'creator', seed: 4242 } })] },
+        { ...base, scatter: { seed: 4242, safe_zone: 'social', intensity: 'normal', styles: ['clean', 'editorial'] } },
+      ];
+      const start = calls.length;
+      for (const captions of free) {
+        const before = calls.length;
+        const result = await finished(jobs, (await jobs.start(request('lines-free.mp4', { captions }))).job_id);
+        assert.notEqual(result.state, 'done', 'the stand-in speech model never produces a file');
+        assert.deepEqual(authorizations(before), [body(false), body(false)], 'geometry, free styles and a free pool stay free');
+      }
+      denyReason = 'sign_in';
+      try {
+        for (const captions of expressive) {
+          const before = calls.length;
+          await assert.rejects(jobs.start(request('lines-expressive.mp4', { captions })), /expressive caption lines or styled words.*Sign in/s, JSON.stringify(captions).slice(0, 80));
+          assert.deepEqual(authorizations(before), [body(true)]);
+        }
+      } finally { denyReason = 'pro'; }
+      for (const captions of expressive) await assert.rejects(jobs.start(request('lines-expressive.mp4', { captions })), /needs Pro/);
+      // A cached free authorization covers the unchanged free body but never an expressive one.
+      offline = true;
+      try {
+        for (const captions of free) assert.notEqual((await finished(jobs, (await jobs.start(request('lines-offline.mp4', { captions }))).job_id)).state, 'done');
+        for (const captions of expressive) await assert.rejects(jobs.start(request('lines-offline.mp4', { captions })), /Cannot reach Modisign/);
+      } finally { offline = false; }
+      // Pro passes both checks with the same body, and a revoked account is denied at dequeue.
+      proAccount = true;
+      try {
+        for (const captions of expressive) {
+          const before = calls.length;
+          const result = await finished(jobs, (await jobs.start(request('lines-pro.mp4', { captions }))).job_id);
+          assert.notEqual(result.state, 'done');
+          assert.doesNotMatch(JSON.stringify(result.error), /needs Pro/);
+          assert.deepEqual(authorizations(before), [body(true), body(true)]);
+        }
+        let seen = 0;
+        onAuthorize = () => { if (++seen === 1) proAccount = false; };
+        const before = calls.length;
+        const result = await finished(jobs, (await jobs.start(request('lines-revoked.mp4', { captions: expressive[0] }))).job_id);
+        assert.equal(result.state, 'failed');
+        assert.match(result.error.error, /needs Pro/);
+        assert.deepEqual(authorizations(before), [body(true), body(true)]);
+      } finally { onAuthorize = null; proAccount = false; }
+      for (const call of calls.slice(start)) {
+        if (call.path !== '/api/mcp/authorize') assert.deepEqual(Object.keys(call.body.props).sort(), ['free', 'kind', 'outcome']);
+        assert.doesNotMatch(JSON.stringify(call.body), /lines|grouping|scatter|rotation|seed|safe_zone|intensity|max_words|4242|editorial|boxed|creator|0\.31|0\.42|0\.055/);
+      }
+      assert.equal((await readdir(output)).some(name => name.startsWith('lines-')), false, 'no partial or final file is published');
+    });
+    await t.test('Scatter reports its stage, publishes once, and an unplaceable phrase fails before any bytes with no text or seed anywhere', async () => {
+      // A stand-in for the speech worker answers the transcribe protocol with fixed words.
+      const spoken = ['SecretOne', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight.'].map((text, index) => ({ id: `w${index}`, text, start: index * 0.25, end: (index + 1) * 0.25 }));
+      onBrowser = async page => {
+        await page.evaluateOnNewDocument(words => {
+          window.Worker = class { postMessage(message) { setTimeout(() => this.onmessage({ data: { type: 'done', id: message.id, words, audio: true } }), 0); } terminate() {} };
+        }, spoken);
+      };
+      const scatter = { seed: 424242, safe_zone: 'social', intensity: 'normal', styles: ['clean', 'boxed', 'minimal'] };
+      const captions = { style: 'clean', ...placement, scatter };
+      const files = await readdir(output);
+      try {
+        const before = calls.length;
+        const seen = [];
+        const job = await jobs.start(request('scatter.mp4', { captions }), async snapshot => { if (seen.at(-1) !== snapshot.state) seen.push(snapshot.state); });
+        const result = await finished(jobs, job.job_id);
+        assert.equal(result.state, 'done', JSON.stringify(result.error));
+        assert.ok(seen.indexOf('preparing_captions') !== -1 && seen.indexOf('preparing_captions') < seen.indexOf('placing_captions') && seen.indexOf('placing_captions') < seen.lastIndexOf('rendering'), seen.join(' > '));
+        assert.deepEqual((await readdir(output)).filter(name => !files.includes(name)), ['scatter.mp4']);
+        // Titles covering every candidate position leave no safe place: the job fails naming the field and owner, and nothing is published.
+        const blocker = y => ({ text: 'WWWWWWWWWWWWWWWW', start: 0, duration: 2, size: 'xl', backing: true, x: 0.5, y });
+        const blocked = await finished(jobs, (await jobs.start(request('scatter-blocked.mp4', { captions, texts: [0.18, 0.28, 0.38, 0.48, 0.58, 0.68].map(blocker) }))).job_id);
+        assert.equal(blocked.state, 'failed');
+        assert.match(blocked.error.error, /Scatter could not keep \d+ caption phrases? clear of the edit .*seconds, blocked by (title:|overlay:|safe-zone)/);
+        assert.equal(blocked.error.field, 'captions.scatter');
+        assert.deepEqual((await readdir(output)).filter(name => !files.includes(name)), ['scatter.mp4'], 'no partial or final file for the blocked job');
+        for (const call of calls.slice(before)) {
+          if (call.path !== '/api/mcp/authorize') assert.deepEqual(Object.keys(call.body.props).sort(), ['free', 'kind', 'outcome']);
+          else assert.deepEqual(call.body, { kind: 'studio', configurations: [], overlayMotionCustomized: false, captionStyle: 'clean', captionCustomized: false, titleEffects: false });
+          assert.doesNotMatch(JSON.stringify(call.body), /SecretOne|424242|seed|scatter|safe_zone|intensity|rotation|WWWW/);
+        }
+        assert.doesNotMatch(JSON.stringify([blocked.error, result.artifact]), /SecretOne|424242/);
+      } finally { onBrowser = null; }
+    });
+    await t.test('full-source transcripts over the caption budget fail the job instead of dropping speech from a short-trimmed edit', async () => {
+      onBrowser = async page => {
+        await page.evaluateOnNewDocument(() => {
+          const words = Array.from({ length: 3000 }, (_, index) => ({ id: `w${index}`, text: 'word', start: index * 0.0006, end: (index + 1) * 0.0006 }));
+          window.Worker = class { postMessage(message) { setTimeout(() => this.onmessage({ data: { type: 'done', id: message.id, words, audio: true } }), 0); } terminate() {} };
+        });
+      };
+      const files = await readdir(output);
+      try {
+        const clips = Array.from({ length: 5 }, () => ({ path: media, track: 'v1', out: 0.5 }));
+        const result = await finished(jobs, (await jobs.start(request('caption-budget.mp4', { clips, captions: { style: 'clean', ...placement } }))).job_id);
+        assert.equal(result.state, 'failed');
+        assert.equal(result.error.field, 'captions');
+        assert.match(result.error.error, /Captions were not built: the speech in these source files is too long/);
+        assert.deepEqual(await readdir(output), files, 'no file is published');
+        // The same speech in one source fits and renders.
+        const fits = await finished(jobs, (await jobs.start(request('caption-fits.mp4', { clips: clips.slice(0, 1), captions: { style: 'clean', ...placement } }))).job_id);
+        assert.equal(fits.state, 'done', JSON.stringify(fits.error));
+      } finally { onBrowser = null; }
     });
     await t.test('titles with a reveal authorize only the fixed titleEffects fact at submission and dequeue', async () => {
       const reveal = { rect: { x: 0.1, width: 0.7 }, direction: 'left', start: 0.2, duration: 0.5, easing: 'ease-in-out' };

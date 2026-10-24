@@ -1,4 +1,5 @@
 // generated from the Modisign monorepo, do not edit
+import { hash32 } from "@/lib/hash32";
 import { SFX_OFFSET, SFX_PACK, SFX_RATE, SFX_ASSETS, type SfxAsset, type SfxCategory } from "@/lib/studio-project";
 import { clipStarts, cutTransition, timelineDuration } from "@/lib/video-timeline";
 import { motionPose } from "@/lib/studio-motion";
@@ -27,14 +28,6 @@ const KEY_ASSET = "ugc-typing-02";
 const INTENSITY = { subtle: 0.7, normal: 1 };
 const TITLE_CATEGORY: Record<AutoSfxOptions["titleSound"], SfxCategory> = { pop: "pop", typing: "typing", sparkle: "sparkle" };
 
-// FNV-1a with a murmur3 finalizer: stable across runs and platforms.
-function hash32(text: string) {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
-  hash = Math.imul(hash ^ (hash >>> 16), 0x85ebca6b);
-  hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
-  return (hash ^ (hash >>> 16)) >>> 0;
-}
 const seconds = (value: number) => `${value.toFixed(2)} s`;
 
 export function autoEventKey(anchor: SfxAnchor) {

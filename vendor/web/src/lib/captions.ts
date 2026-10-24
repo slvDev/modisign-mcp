@@ -1,7 +1,7 @@
 // generated from the Modisign monorepo, do not edit
 import { clipStarts, cutTransition, type TimingClip } from "@/lib/video-timeline";
-import type { CaptionSettings, CaptionStyleId } from "@/lib/studio-project";
-import { CAPTION_FONTS, isEffectiveAppearance, mixAppearance, type CaptionFont, type WordAppearance } from "@/lib/caption-mix";
+import type { CaptionPlacement, CaptionStyleId } from "@/lib/studio-project";
+import { CAPTION_FONTS, isEffectiveAppearance, type CaptionFont, type CaptionMix, type WordAppearance } from "@/lib/caption-mix";
 export type { CaptionStyleId, CaptionPlacement, CaptionSettings } from "@/lib/studio-project";
 
 export const SPEECH_FILES = Object.freeze(["config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json", "preprocessor_config.json", "onnx/encoder_model_quantized.onnx", "onnx/decoder_model_merged_quantized.onnx"]);
@@ -11,7 +11,12 @@ export const SPEECH_REVISION = "79fb389fc764e7c395bd330e9531d9d32ada7049";
 export const ASR_BACKEND = "wasm" as const;
 export type CaptionWord = { id: string; text: string; start: number; end: number };
 export type TimelineWord = CaptionWord & { mediaId: string; clipId: string; sourceId: string; look?: WordAppearance };
-export type CaptionLine = { id: string; words: TimelineWord[]; text: string; start: number; end: number };
+// A number is a nominal font height as a fraction of the shorter output side; S/M/L keep the historical width-relative sizes.
+export type CaptionSize = CaptionPlacement["size"] | number;
+// The resolved look of one line: block centre in output fractions, size, clockwise degrees and its own style.
+export type LineTreatment = { style: CaptionStyleId; mix?: CaptionMix; x: number; y: number; size: CaptionSize; rotation: number };
+// A phrase as it appears on one clip: `owner` is its source identity, `id` is `<clip>/<phrase>`.
+export type CaptionLine = { id: string; owner: { mediaId: string; phraseId: string; clipId: string }; words: TimelineWord[]; text: string; start: number; end: number; treatment: LineTreatment };
 export type CaptionStyle = {
   id: CaptionStyleId; name: string; free: boolean;
   font: "sans" | "serif" | "mono"; weight: number;
@@ -52,7 +57,7 @@ export const CAPTION_STYLES: readonly CaptionStyle[] = [
 // Local per-word edits, by source media and source word id, like transcript corrections: never saved.
 export type WordStyles = Record<string, Record<string, WordAppearance>>;
 export const DEFAULT_LEADING = 1.35;
-export const WORD_STYLES_NOTE = "Projects save the caption mix, not caption text or individual word edits.";
+export const WORD_STYLES_NOTE = "Projects save the caption recipe, grouping and clip flags, not caption text, line positions or word edits.";
 export type ResolvedLook = { font: CaptionFont; weight: number; italic: boolean; fill: string | null; tracking: number; leading: number; underline: boolean; highlight: string | null };
 // The face group (font, weight, italic) comes from the look when it names a font, else from the style.
 export function resolveLook(style: CaptionStyle, look: WordAppearance | undefined): ResolvedLook {
@@ -66,17 +71,10 @@ export function resolveLook(style: CaptionStyle, look: WordAppearance | undefine
   };
 }
 // A manual look replaces the mix's face group as a whole; every other field overrides on its own.
-function mergeLooks(base: WordAppearance | undefined, over: WordAppearance | undefined): WordAppearance | undefined {
+export function mergeLooks(base: WordAppearance | undefined, over: WordAppearance | undefined): WordAppearance | undefined {
   if (base === undefined || over === undefined) return base === undefined ? over : base;
   const { font, weight, italic, ...rest } = base;
   return { ...(over.font === undefined ? { font, weight, italic } : {}), ...rest, ...over };
-}
-export function styledWords(words: TimelineWord[], settings: CaptionSettings, wordStyles: WordStyles): TimelineWord[] {
-  return words.map((word) => {
-    const manual = wordStyles[word.mediaId] === undefined ? undefined : wordStyles[word.mediaId][word.sourceId];
-    const look = mergeLooks(settings.mix === undefined ? undefined : mixAppearance(settings.mix, word.sourceId), manual);
-    return look === undefined ? word : { ...word, look };
-  });
 }
 // An underline or highlight switched off changes nothing on a style that has none, so it is not a customization.
 export function customizedWords(words: readonly TimelineWord[], wordStyles: WordStyles) {
@@ -93,11 +91,11 @@ export function captionStyle(id: CaptionStyleId) {
 export function captionDisplayText(text: string, casing: CaptionStyle["casing"]) {
   return casing === "upper" ? text.toUpperCase() : casing === "lower" ? text.toLowerCase() : text;
 }
-export function timelineWords(clips: (TimingClip & { id: string; mediaId: string | null; kind: "video" | "photo"; inPoint: number; outPoint: number })[], transcripts: Record<string, CaptionWord[]>): TimelineWord[] {
+export function timelineWords(clips: (TimingClip & { id: string; mediaId: string | null; kind: "video" | "photo"; inPoint: number; outPoint: number; captionEnabled?: false })[], transcripts: Record<string, CaptionWord[]>): TimelineWord[] {
   const result: TimelineWord[] = [];
   const starts = clipStarts(clips);
   for (const [index, clip] of clips.entries()) {
-    if (clip.track !== "v1") continue;
+    if (clip.track !== "v1" || clip.captionEnabled === false) continue;
     const offset = starts[index];
     const transition = cutTransition(clips, index);
     const endPoint = clip.outPoint - (transition !== undefined && transition.type === "crossfade" ? transition.duration : 0);
@@ -113,22 +111,6 @@ export function timelineWords(clips: (TimingClip & { id: string; mediaId: string
     }
   }
   return result;
-}
-export function captionLines(words: TimelineWord[], style: CaptionStyleId): CaptionLine[] {
-  const lines: CaptionLine[] = [];
-  let group: TimelineWord[] = [];
-  function flush() {
-    if (group.length === 0) return;
-    lines.push({ id: group[0].id, words: group, text: group.map((word) => word.text).join(" "), start: group[0].start, end: group[group.length - 1].end });
-    group = [];
-  }
-  for (const word of words) {
-    const previous = group.at(-1);
-    if (previous !== undefined && (style === "word-pop" || previous.clipId !== word.clipId || word.start - previous.end > 0.6 || /[.!?]["')]*$/.test(previous.text) || group.length >= 7 || group.map((item) => item.text).join(" ").length + word.text.length + 1 > 32)) flush();
-    group.push(word);
-  }
-  flush();
-  return lines;
 }
 export function replaceCaptionWords(words: CaptionWord[], ids: string[], text: string): CaptionWord[] {
   const selected = words.filter((word) => ids.includes(word.id));

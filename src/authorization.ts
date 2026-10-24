@@ -6,7 +6,7 @@ import { denied, OfflineError, ToolError } from "./errors.js";
 // Names what the request uses so a denial says which part needs Pro, from the fixed booleans already sent for authorization.
 function proSubject(body: Record<string, unknown>) {
   if (body.kind !== "studio") return "This overlay configuration";
-  const used = [["titleEffects", "a title effect (reveal or behind person)"], ["captionCustomized", "custom caption word styles"], ["overlayMotionCustomized", "motion on a catalog overlay"]].filter(([key]) => body[key] === true).map(([, label]) => label);
+  const used = [["titleEffects", "a title effect (reveal or behind person)"], ["captionCustomized", "expressive caption lines or styled words"], ["overlayMotionCustomized", "motion on a catalog overlay"]].filter(([key]) => body[key] === true).map(([, label]) => label);
   return used.length === 0 ? "This edit's overlay configuration or caption style" : `This edit uses ${used.join(", ")}, which`;
 }
 export async function authorizeRequest(body: Record<string, unknown>, key: string, signal?: AbortSignal) {

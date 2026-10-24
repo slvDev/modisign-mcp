@@ -11,6 +11,7 @@ Make animated overlays and edit short videos from Claude, ChatGPT, Cursor or any
 - “Cut these three clips into one Reel, remove the pauses and add captions.”
 - “Put reference.mp4 on top, muted, me.mp4 on the bottom, crop 5% off the sides, start them together, Clean captions from my voice.”
 - “Make a five-frame rapid intro from grind.mp4, pour.mp4, stir.mp4, steam.mp4 and serve.mp4, then replay them with source timestamps and the labels “Grind beans”, “Pour water”, “Stir”, “Steam milk” and “Serve”, in 9:16.”
+- “Use these five clips in order, add a five-frame rapid intro with these labels, generate captions with a different style and safe position for each short phrase using Scatter seed 58 with free styles, then export a vertical 720p MP4; tell me before rendering if the caption styles need Pro.”
 - “On the first clip, smoothly zoom from 100% at source 0s to 120% at 2s, then slide 15% left by 3s; fade ‘Watch this’ in over its first half-second, in 9:16.”
 - “Add a quiet interface click at 1.2 seconds and a bubble pop when the title “My three tips” appears; keep the clip's speech volume unchanged.”
 - “Add subtle whooshes at my crossfades and clicks at declared overlay taps, using different variants; tell me which overlays have no tap cue.”
@@ -66,6 +67,20 @@ A rapid intro opens with 5–7 teaser cuts of three to six frames each (default 
 A title can also take an optional `reveal`, a rectangular wipe over stationary text: `"reveal":{"direction":"right","duration":0.5}` shows “Coffee in five steps” growing from its left edge over half a second. Every field is optional and the tool schema lists them. It is drawn on your computer, and a title with a reveal needs Pro to export.
 
 To put a title behind a person, add `occlusion`: “Put the title ‘Sunday reset’ behind me in this clip from 1 to 4 seconds, near the top, with a soft edge” is `"texts":[{"text":"Sunday reset","start":1,"duration":3,"y":0.25,"occlusion":{"clip":0,"feather":2}}]`. `clip` is the index in `clips` of the clip whose people stand in front; the tool schema has the other fields and rules. People are found on your computer with a small people model that ships inside the package, and nothing about them leaves your computer. A title behind people needs Pro to export.
+
+## Caption lines and Scatter example
+
+Speech is cut into short phrases, and each phrase can have its own position, size, rotation and style. `captions.grouping` sets how speech is cut (`max_words`, `max_characters`, `max_duration` seconds and `pause` seconds). `captions.scatter` gives every phrase its own placement, a small rotation and a style from your list, the same for the same `seed`:
+
+```json
+"captions": {
+  "style": "clean", "position": "lower", "size": "m",
+  "scatter": {"seed": 58, "safe_zone": "social", "intensity": "normal", "styles": ["clean", "boxed", "minimal"]},
+  "lines": [{"clip": 0, "from": 1.2, "to": 2.8, "x": 0.32, "y": 0.35, "size": 0.055, "rotation": -4, "style": "boxed"}]
+}
+```
+
+Each `lines` row names a V1 clip by its index in `clips` and a range of source seconds. It changes every whole phrase whose middle (the first word's start plus the last word's end, halved) falls in `from` up to but not including `to` inside that clip's trim; one range can change several phrases, and overlapping rows apply in order. `x` and `y` are the phrase's centre as fractions of the picture, `size` is the text height as a fraction of the picture's shorter side, `rotation` is clockwise degrees. A row that matches no spoken phrase, or whose phrases are gone after pause removal or a rapid intro, is an error that names it. Set a V1 clip's `captions_enabled` to `false` to keep its speech out of the captions; the rapid intro's teaser cuts show no captions unless `rapid_intro.captions_on_teasers` is `true`. Moving, sizing and rotating phrases is free; a style other than Clean, Boxed or Minimal on a line or in the Scatter list, Mixed, or styled words needs Pro.
 
 ## Motion example
 
@@ -170,14 +185,14 @@ Run `npx -y @modisign/mcp doctor` to check your setup.
 
 One free preset per overlay type renders without an account; format and background changes stay free.  
 Customised overlays (including overlay motion), Pro presets and expressive caption styles need Pro.  
-Video edits with no overlays or only unchanged free presets and Clean, Boxed or Minimal captions are free, including footage and title motion, plain titles, the rapid intro and sound effects. A title with a reveal or behind people needs Pro.
+Video edits with no overlays or only unchanged free presets and Clean, Boxed or Minimal captions are free, including footage and title motion, plain titles, the rapid intro, sound effects and caption line and Scatter placement with those styles. A title with a reveal or behind people needs Pro.
 Pro is $9/month: [Pricing](https://modisign.app/pricing). Sign in with `npx -y @modisign/mcp login`.
 
 ## Privacy
 
 - Your videos, photos and audio never leave your computer.
-- Only overlay settings, overlay text, the chosen caption style and two yes/no facts (whether an overlay's motion was customised, whether a title uses a reveal or Behind people) reach Modisign.
-- Titles, rapid-intro labels, sound choices and motion keys never reach Modisign; your assistant sees them in the request.
+- Only overlay settings, overlay text, the chosen caption style and three yes/no facts (whether an overlay's motion was customised, whether a title uses a reveal or Behind people, whether captions use expressive line styles or styled words) reach Modisign.
+- Titles, rapid-intro labels, caption line positions, sizes, rotations, Scatter seeds, phrase grouping, sound choices and motion keys never reach Modisign; your assistant sees them in the request.
 - Captions are made on your computer with an English speech model downloaded once from Hugging Face (about 43 MB).
 - Anonymous usage counts have no account link; turn them off with `MODISIGN_NO_TELEMETRY=1`.
 

@@ -1,5 +1,7 @@
 // generated from the Modisign monorepo, do not edit
 import { toSvg } from "html-to-image";
+import { DiagnosticError } from "../../../server/src/diagnostics";
+import { compositionNotReady, READY_TIMEOUT_MS } from "@/lib/composition-ready";
 
 const FPS = 30;
 
@@ -31,13 +33,13 @@ type CompositionWindow = Window & {
 function composition(frame: HTMLIFrameElement) {
   const view = frame.contentWindow as CompositionWindow | null;
   const doc = frame.contentDocument;
-  if (view === null || doc === null) throw new Error("Composition frame is unavailable");
+  if (view === null || doc === null) throw new DiagnosticError("Composition frame is unavailable", "frame_load");
   return { view, doc };
 }
 
 // Resolves with the paused player once the runtime, fonts and images have loaded and seeking drives the timeline.
 export async function readyComposition(frame: HTMLIFrameElement, signal: AbortSignal) {
-  const deadline = performance.now() + 30_000;
+  const deadline = performance.now() + READY_TIMEOUT_MS;
   while (performance.now() < deadline) {
     signal.throwIfAborted();
     const { view, doc } = composition(frame);
@@ -52,18 +54,18 @@ export async function readyComposition(frame: HTMLIFrameElement, signal: AbortSi
       await view.__player.renderSeek(1 / FPS);
       if (Math.abs(view.__timelines.main.time() - 1 / FPS) < 1e-3) {
         const root = doc.getElementById("root");
-        if (root === null) throw new Error("Composition has no root");
+        if (root === null) throw new DiagnosticError("Composition has no root", "frame_load");
         return { player: view.__player, root, doc };
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("The clip did not load within 30 seconds");
+  throw compositionNotReady();
 }
 
 async function dataUrl(url: string) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Font request returned ${response.status}`);
+  if (!response.ok) throw new DiagnosticError(`Font request returned ${response.status}`, "font_load");
   const reader = new FileReader();
   const loaded = new Promise<string>((resolve, reject) => {
     reader.onload = () => resolve(reader.result as string);
@@ -109,9 +111,9 @@ async function embedFonts(doc: Document) {
 
 export async function compositionCapture(frame: HTMLIFrameElement, width: number, height: number, signal: AbortSignal) {
   const { player, root, doc } = await readyComposition(frame, signal);
-  const bounds = root.getBoundingClientRect();
-  if (bounds.width !== width || bounds.height !== height) {
-    throw new Error("Composition dimensions do not match export dimensions");
+  // Layout pixels: at browser zoom getBoundingClientRect is off by fractions of a pixel.
+  if (root.offsetWidth !== width || root.offsetHeight !== height) {
+    throw new DiagnosticError(`Composition is ${root.offsetWidth}×${root.offsetHeight}, not the ${width}×${height} export size`, "composition_dimensions");
   }
   const fontEmbedCSS = await embedFonts(doc);
   return async (time: number) => {
@@ -124,7 +126,7 @@ export async function compositionCapture(frame: HTMLIFrameElement, width: number
     );
     for (const native of [root, ...root.querySelectorAll<HTMLElement>("[id]")]) {
       const copy = clone.getElementById(native.id) as HTMLElement | null;
-      if (copy === null) throw new Error(`Capture lost element ${native.id}`);
+      if (copy === null) throw new DiagnosticError(`Capture lost element ${native.id}`, "draw_failed");
       const style = window.getComputedStyle(native);
       // The library rounds font sizes and freezes inline widths, which can introduce new word breaks.
       copy.style.fontSize = style.fontSize;
@@ -138,7 +140,7 @@ export async function compositionCapture(frame: HTMLIFrameElement, width: number
     }
     const drawings = clone.querySelectorAll<SVGElement>("foreignObject svg *");
     const natives = root.querySelectorAll("svg *");
-    if (drawings.length !== natives.length) throw new Error("Capture lost SVG elements");
+    if (drawings.length !== natives.length) throw new DiagnosticError("Capture lost SVG elements", "draw_failed");
     drawings.forEach((copy, at) => {
       const style = window.getComputedStyle(natives[at]);
       for (const name of SVG_STYLES) copy.style.setProperty(name, style.getPropertyValue(name));

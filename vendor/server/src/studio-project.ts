@@ -135,8 +135,21 @@ export const DEFAULT_TEXT_STYLE: Readonly<TextStyle> = { font: "sans", weight: 8
 // A saved title shows for its clip's whole span (`clip`, an index into the saved clips) or for an explicit post-overlap interval.
 export type ProjectText = TextLabel & TextStyle & ({ clip: number; start?: never; duration?: never } | { clip?: never; start: number; duration: number })
   & { motion?: LayerMotion; reveal?: TitleReveal; occlusion?: TitleOcclusion; animationOffset?: number };
-// The mix recipe is saved with its style; individual word looks never are.
-export type CaptionSettings = CaptionPlacement & { style: CaptionStyleId; mix?: CaptionMix };
+// Phrase grouping and the Scatter recipe are saved preferences; phrase membership, line geometry and per-line styles are local to the tab.
+export type CaptionSettings = CaptionPlacement & { style: CaptionStyleId; mix?: CaptionMix; grouping?: CaptionGrouping; scatter?: CaptionScatter };
+// Words per phrase, characters per phrase, phrase seconds and the pause that ends one; the defaults are the historical grouping.
+export type CaptionGrouping = { maxWords: number; maxCharacters: number; maxDuration: number; pause: number };
+export const GROUPING_LIMITS = { maxWords: { min: 1, max: 12 }, maxCharacters: { min: 8, max: 60 }, maxDuration: { min: 0.5, max: 30 }, pause: { min: 0.1, max: 2 } } as const;
+export const DEFAULT_GROUPING: Readonly<CaptionGrouping> = { maxWords: 7, maxCharacters: 32, maxDuration: 30, pause: 0.6 };
+export const SCATTER_GROUPING: Readonly<CaptionGrouping> = { maxWords: 4, maxCharacters: 24, maxDuration: 1.8, pause: 0.35 };
+export const SCATTER_SAFE_ZONES = ["social", "frame"] as const;
+export const SCATTER_INTENSITIES = ["subtle", "normal"] as const;
+export type CaptionScatter = { seed: number; safeZone: typeof SCATTER_SAFE_ZONES[number]; intensity: typeof SCATTER_INTENSITIES[number]; styles: CaptionStyleId[] };
+// Per-line geometry: block centre as output fractions, nominal font height as a fraction of the shorter output side, clockwise degrees.
+export const LINE_SIZE = { min: 0.02, max: 0.14 } as const;
+export const LINE_ROTATION = { min: -30, max: 30 } as const;
+// Sparse overrides of one phrase; absent fields inherit. A style other than Mixed carries no mix, and Mixed carries its own.
+export type CaptionLineOverride = { x?: number; y?: number; size?: number; rotation?: number; style?: CaptionStyleId; mix?: CaptionMix };
 export type ClipSettings = {
   frameMode: "fill" | "fit";
   centerX: number; centerY: number; zoom: number;
@@ -263,10 +276,11 @@ export function isPlace(value: unknown): value is Place {
     && value.x + value.width <= 1 + STUDIO_TIME_TOLERANCE && value.y + value.height <= 1 + STUDIO_TIME_TOLERANCE;
 }
 export type ProjectOverlay = { family: string; preset: string; start: number; configuration: string; motion?: LayerMotion };
+// `captionEnabled: false` keeps the clip's speech out of the captions; present only when off.
 export type ProjectClip = (
   | { label: string; kind: "video"; duration: number; inPoint: number; outPoint: number; settings: ClipSettings; punchIns?: PunchIn[] }
   | { label: string; kind: "photo"; duration: number; settings: PhotoSettings; sourceStart?: number; punchIns?: PunchIn[] }
-) & { crop?: Crop; place?: Place; motion?: LayerMotion } & ({ track?: never; start?: never } | { track: "v2"; start: number });
+) & { crop?: Crop; place?: Place; motion?: LayerMotion; captionEnabled?: false } & ({ track?: never; start?: never } | { track: "v2"; start: number });
 export function projectClipDuration(clip: ProjectClip) {
   return clip.kind === "photo" ? clip.duration : clip.outPoint - clip.inPoint;
 }
@@ -323,12 +337,45 @@ function number(value: unknown): value is number {
 function range(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
+export function isCaptionGrouping(value: unknown): value is CaptionGrouping {
+  if (!record(value, ["maxWords", "maxCharacters", "maxDuration", "pause"])) return false;
+  const whole = (item: unknown, { min, max }: { min: number; max: number }) => range(item, min, max) && Number.isInteger(item);
+  return whole(value.maxWords, GROUPING_LIMITS.maxWords) && whole(value.maxCharacters, GROUPING_LIMITS.maxCharacters)
+    && range(value.maxDuration, GROUPING_LIMITS.maxDuration.min, GROUPING_LIMITS.maxDuration.max) && range(value.pause, GROUPING_LIMITS.pause.min, GROUPING_LIMITS.pause.max);
+}
+export const isCaptionStyleId = (value: unknown): value is CaptionStyleId => CAPTION_STYLE_IDS.some((style) => style === value);
+export function isCaptionScatter(value: unknown): value is CaptionScatter {
+  return record(value, ["seed", "safeZone", "intensity", "styles"])
+    && typeof value.seed === "number" && Number.isInteger(value.seed) && value.seed >= 0 && value.seed <= 0xffffffff
+    && SCATTER_SAFE_ZONES.some((zone) => zone === value.safeZone) && SCATTER_INTENSITIES.some((intensity) => intensity === value.intensity)
+    && Array.isArray(value.styles) && value.styles.length >= 1 && value.styles.every(isCaptionStyleId) && new Set(value.styles).size === value.styles.length;
+}
+// The first reason a line override cannot exist, naming its field, or null. Every field is optional but at least one is present.
+export function lineOverrideProblem(value: unknown): { field: string; message: string } | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { field: "", message: "A line override is an object." };
+  const keys = Object.keys(value);
+  const unknown = keys.find((key) => !["x", "y", "size", "rotation", "style", "mix"].includes(key));
+  if (unknown !== undefined) return { field: unknown, message: `A line has no ${unknown} field. Use x, y, size, rotation, style and mix.` };
+  if (keys.length === 0) return { field: "", message: "A line override needs at least one field." };
+  const line = value as Record<string, unknown>;
+  for (const field of ["x", "y"] as const) if (keys.includes(field) && !range(line[field], 0, 1)) return { field, message: `The line ${field} is a fraction from 0 to 1.` };
+  if (keys.includes("size") && !range(line.size, LINE_SIZE.min, LINE_SIZE.max)) return { field: "size", message: `The line size is a fraction of the shorter side from ${LINE_SIZE.min} to ${LINE_SIZE.max}.` };
+  if (keys.includes("rotation") && !range(line.rotation, LINE_ROTATION.min, LINE_ROTATION.max)) return { field: "rotation", message: `The line rotation is from ${LINE_ROTATION.min} to ${LINE_ROTATION.max} degrees.` };
+  if (keys.includes("style") && !isCaptionStyleId(line.style)) return { field: "style", message: `The line style must be one of ${CAPTION_STYLE_IDS.join(", ")}.` };
+  if (keys.includes("mix") && !isCaptionMix(line.mix)) return { field: "mix", message: "The line mix needs a preset, a seed and a palette." };
+  if ((line.style === "mixed") !== keys.includes("mix") && keys.includes("style")) return { field: "mix", message: "The Mixed style needs a mix, and no other style has one." };
+  if (keys.includes("mix") && !keys.includes("style")) return { field: "mix", message: "A line mix goes with the Mixed style." };
+  return null;
+}
+export const isCaptionLineOverride = (value: unknown): value is CaptionLineOverride => lineOverrideProblem(value) === null;
 export function isCaptionSettings(value: unknown): value is CaptionSettings {
   if (typeof value !== "object" || value === null) return false;
   const mixed = Object.hasOwn(value, "mix");
-  return record(value, mixed ? ["style", "position", "size", "mix"] : ["style", "position", "size"])
-    && CAPTION_STYLE_IDS.some((style) => style === value.style)
+  const keys = ["style", "position", "size", ...(mixed ? ["mix"] : []), ...(Object.hasOwn(value, "grouping") ? ["grouping"] : []), ...(Object.hasOwn(value, "scatter") ? ["scatter"] : [])];
+  return record(value, keys)
+    && isCaptionStyleId(value.style)
     && (value.style === "mixed") === mixed && (!mixed || isCaptionMix(value.mix))
+    && (!Object.hasOwn(value, "grouping") || isCaptionGrouping(value.grouping)) && (!Object.hasOwn(value, "scatter") || isCaptionScatter(value.scatter))
     && (value.position === "upper" || value.position === "center" || value.position === "lower")
     && (value.size === "s" || value.size === "m" || value.size === "l");
 }
@@ -500,6 +547,7 @@ export function isStudioProject(value: unknown, presets: ReadonlySet<string>): v
     if (Object.hasOwn(clip, "crop")) { if (!isCrop(clip.crop)) return false; spatialKeys.push("crop"); }
     if (Object.hasOwn(clip, "place")) { if (!isPlace(clip.place)) return false; spatialKeys.push("place"); }
     if (Object.hasOwn(clip, "motion")) { if (!isLayerMotion(clip.motion, clip.kind === "photo" ? PHOTO_MOTION_TIME : MOTION_TIME)) return false; spatialKeys.push("motion"); }
+    if (Object.hasOwn(clip, "captionEnabled")) { if (clip.captionEnabled !== false) return false; spatialKeys.push("captionEnabled"); }
     if (Object.hasOwn(clip, "track")) {
       if (clip.track !== "v2" || !number(clip.start)) return false;
       spatialKeys.push("track", "start");

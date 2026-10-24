@@ -1,4 +1,5 @@
 // generated from the Modisign monorepo, do not edit
+import { DiagnosticError } from "../../../server/src/diagnostics";
 import { aacPriming, STUDIO_AAC_CONFIG } from "@/lib/aac-timing";
 import type { SfxPcm } from "@/lib/sfx-assets";
 import { sfxEnvelope } from "@/lib/studio-sfx";
@@ -13,7 +14,7 @@ export type TimelineAudioPolicy = "normalize" | "preserve";
 // Normalized exports always carry AAC, even for photo-only or silent sequences.
 export async function requireNormalizedAudioEncoding() {
   if (!(await canEncodeAudio("aac", { sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 }))) {
-    throw new Error("This browser cannot encode the AAC audio Studio exports need. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.");
+    throw new DiagnosticError("This browser cannot encode the AAC audio Studio exports need. Update your browser. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.", "unsupported_aac_encoder", "audio_check");
   }
 }
 
@@ -48,7 +49,7 @@ export async function createTimelineAudio(input: Input | null, policy: TimelineA
   const numberOfChannels = await track.getNumberOfChannels();
   const quality = new Quality("high");
   if (!(await track.canDecode()) || !(await canEncodeAudio("aac", { sampleRate, numberOfChannels, quality }))) {
-    throw new Error("This browser cannot export this video's audio to AAC. Try an H.264/AAC MP4 in a recent Chrome or Edge.");
+    throw new DiagnosticError("This browser cannot export this video's audio to AAC. Try an H.264/AAC MP4 in a recent Chrome or Edge.", "unsupported_aac_encoder", "audio_check");
   }
   const source = new AudioSampleSource({ codec: "aac", quality });
   return { source, append: async (_input: Input | null, origin: number, offset: number, duration: number, signal: AbortSignal) => {
@@ -129,7 +130,7 @@ export async function mixTimelineAudio(timeline: VideoTimeline, sources: Timelin
           if (cursor === undefined) {
             const media = await sources.sources[item.index];
             const track = media.input === null ? null : await media.input.getPrimaryAudioTrack();
-            if (track !== null && !(await track.canDecode())) throw new Error("This browser cannot decode a clip's audio. Try an H.264/AAC MP4.");
+            if (track !== null && !(await track.canDecode())) throw new DiagnosticError("This browser cannot decode a clip's audio. Try an H.264/AAC MP4.", "unsupported_audio_decoder");
             if (track === null) cursor = null;
             else {
               const buffers = new AudioBufferSink(track).buffers(media.sourceStart, media.sourceStart + clipDuration(timeline.clips[item.index]));

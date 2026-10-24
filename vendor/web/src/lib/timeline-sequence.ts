@@ -1,4 +1,5 @@
 // generated from the Modisign monorepo, do not edit
+import { DiagnosticError } from "../../../server/src/diagnostics";
 import { ALL_FORMATS, BlobSource, Input, VideoSampleSink, type VideoSample, type InputVideoTrack } from "mediabunny";
 import { drawClip, clipPunchInTiming, clipPivot, clipSourceStart } from "@/lib/clip-settings";
 import { activePersonTitles, createPersonLayer, personParams, personTitlesOf, type PersonLayer } from "@/lib/person-layer";
@@ -11,7 +12,7 @@ export function timelineSources(timeline: VideoTimeline) {
   const inputs = timeline.clips.map((clip) => clip.kind === "photo" ? null : new Input({ source: new BlobSource(clip.file), formats: ALL_FORMATS }));
   const sources = inputs.map(async (input, index) => {
     const track = input === null ? null : await input.getPrimaryVideoTrack();
-    if (input !== null && (track === null || !(await track.canDecode()))) throw new Error("This browser cannot decode a clip's picture.");
+    if (input !== null && (track === null || !(await track.canDecode()))) throw new DiagnosticError("This browser cannot decode a clip's picture.", "unsupported_video_decoder");
     const videoOrigin = track === null ? 0 : await track.getFirstTimestamp();
     const audioTrack = input === null ? null : await input.getPrimaryAudioTrack();
     const origin = sourceOrigin(videoOrigin, audioTrack === null ? null : await audioTrack.getFirstTimestamp());

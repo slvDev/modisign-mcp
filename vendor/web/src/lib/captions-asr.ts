@@ -1,4 +1,5 @@
 // generated from the Modisign monorepo, do not edit
+import { DiagnosticError, type CAPTION_STAGES, type DiagnosticCode } from "../../../server/src/diagnostics";
 import { SPEECH_FILES, SPEECH_MODEL, SPEECH_REVISION, type CaptionWord } from "./captions";
 import { diagnosticsEnabled, mark, phase, registerSnapshot, type MarkDetail } from "./media-diagnostics";
 
@@ -9,7 +10,7 @@ export type AsrRequest = { type: "transcribe"; id: number; file: File; duration:
 export type AsrMessage =
   | { type: "progress"; id: number; progress: AsrProgress }
   | { type: "done"; id: number; words: CaptionWord[]; audio: boolean }
-  | { type: "error"; id: number; message: string }
+  | { type: "error"; id: number; message: string; stage: typeof CAPTION_STAGES[number]; code: DiagnosticCode }
   | { type: "mark"; name: string; detail: MarkDetail | null }
   | { type: "phase"; name: string; state: "start" | "end"; detail: MarkDetail | null }
   | { type: "inputs"; open: number };
@@ -77,12 +78,12 @@ export function captionTranscriber(signal: AbortSignal, onProgress: (progress: A
         const request = pending;
         pending = null;
         if (message.type === "done") request.resolve({ words: message.words, audio: message.audio });
-        else request.reject(new Error(message.message));
+        else request.reject(new DiagnosticError(message.message, message.code, message.stage));
       }
     }
   };
   worker.onerror = (event) => {
-    failure = new Error(event.message);
+    failure = new DiagnosticError(event.message, "worker_failed", "worker");
     if (pending !== null) { pending.reject(failure); pending = null; }
     dispose();
   };

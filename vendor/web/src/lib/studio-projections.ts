@@ -4,7 +4,7 @@ import { previewHref } from "@/lib/hrefs";
 import { configOptions } from "@/lib/template-config";
 import { transparentOverlay } from "@/lib/own-video";
 import { clipStarts, timelineDuration, studioSize, type VideoPreviewTimeline } from "@/lib/video-timeline";
-import { captionLines, styledWords, timelineWords } from "@/lib/captions";
+import { captionCues, captionLines } from "@/lib/caption-lines";
 import { timelineTexts, textSpan, type StudioText } from "@/lib/studio-text";
 import { sfxPlacements, timelineSfx, type SfxPlacement } from "@/lib/studio-sfx";
 import type { StudioClip, StudioMedia, StudioOverlay, StudioState } from "@/lib/studio-state";
@@ -24,7 +24,14 @@ export function clipTime(time: number) {
   return `${sign}${Math.floor(tenths / 600)}:${((tenths % 600) / 10).toFixed(1).padStart(4, "0")}`;
 }
 
-export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "overlays" | "texts" | "sfx" | "aspect" | "transcripts" | "wordStyles" | "captions">): VideoPreviewTimeline {
+// The overlays as the shared render descriptor: the transparent preview URL of the configuration at the output aspect, which the export and the Scatter analysis capture alike.
+export const timelineOverlays = (overlays: StudioOverlay[], aspect: StudioState["aspect"]): VideoPreviewTimeline["overlays"] => overlays.map(({ id, family, config, start, motion }) => ({
+  id, motion,
+  src: previewHref(family.id, transparentOverlay(configOptions(family, family.looks, { ...config, aspect }))),
+  ...ASPECTS[aspect], duration: config.duration, startsAt: start,
+}));
+
+export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "overlays" | "texts" | "sfx" | "aspect" | "transcripts" | "wordStyles" | "captionPhrases" | "lineOverrides" | "scatterPlan" | "captions">): VideoPreviewTimeline {
   const starts = clipStarts(state.clips);
   return { clips: state.clips.map((clip, index) => {
     if (clip.mediaId === null) throw new Error("Relink every missing clip before rendering");
@@ -36,12 +43,8 @@ export function studioTimeline(state: Pick<StudioState, "media" | "clips" | "ove
     ...studioSize(state.aspect), frameRate: 30,
     texts: timelineTexts(state.texts, state.clips),
     sfx: timelineSfx(state),
-    captions: state.captions === null ? undefined : { ...state.captions, lines: captionLines(styledWords(timelineWords(state.clips, state.transcripts), state.captions, state.wordStyles), state.captions.style) },
-    overlays: state.overlays.map(({ id, family, config, start, motion }) => ({
-      id, motion,
-      src: previewHref(family.id, transparentOverlay(configOptions(family, family.looks, { ...config, aspect: state.aspect }))),
-      ...ASPECTS[state.aspect], duration: config.duration, startsAt: start,
-    })) };
+    captions: state.captions === null ? undefined : { ...state.captions, lines: captionCues(captionLines(state, state.captions)) },
+    overlays: timelineOverlays(state.overlays, state.aspect) };
 }
 // Where a seek lands: inside the sequence.
 export const clampSeek = (clips: StudioClip[], time: number) => Math.max(0, Math.min(time, studioDuration(clips)));

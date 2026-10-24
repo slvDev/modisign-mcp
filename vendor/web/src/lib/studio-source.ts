@@ -1,5 +1,6 @@
 // generated from the Modisign monorepo, do not edit
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input, VideoSampleSink, type InputAudioTrack, type InputVideoTrack } from "mediabunny";
+import { DiagnosticError } from "../../../server/src/diagnostics";
 import { ImportError } from "@/lib/import-progress";
 import { createSilenceLevels } from "@/lib/studio-silences";
 import { sourceOrigin } from "@/lib/video-timeline";
@@ -12,7 +13,7 @@ export function thumbnail(width: number, height: number, quality: number, draw: 
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const context = canvas.getContext("2d");
-  if (context === null) throw new ImportError("couldn’t finish preparing previews. The browser couldn’t create a preview image.");
+  if (context === null) throw new ImportError("couldn’t finish preparing previews. The browser couldn’t create a preview image.", "poster_failed", "poster");
   draw(context);
   return canvas.toDataURL("image/jpeg", quality);
 }
@@ -27,7 +28,7 @@ async function withSource<T>(file: File, signal: AbortSignal, run: (source: Sour
   signal.addEventListener("abort", abort, { once: true });
   try {
     const video = await input.getPrimaryVideoTrack();
-    if (video === null) throw new Error("Video picture is unavailable");
+    if (video === null) throw new DiagnosticError("Video picture is unavailable", "no_video_track");
     const audio = await input.getPrimaryAudioTrack();
     const pictureStart = await video.getFirstTimestamp();
     const origin = sourceOrigin(pictureStart, audio === null ? null : await audio.getFirstTimestamp());
@@ -50,9 +51,9 @@ export function sourceHasAudio(file: File, signal: AbortSignal) {
 export function analyseSourceAudio(file: File, duration: number, signal: AbortSignal, onProgress: (seconds: number) => void) {
   return withSource(file, signal, async ({ audio, origin }): Promise<SourceAudio | null> => {
     if (audio === null) return null;
-    if (!(await audio.canDecode())) throw new Error(typeof AudioDecoder === "undefined"
-      ? "This browser doesn’t support the audio editing Studio needs. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later."
-      : "This browser can’t decode this clip’s audio.");
+    if (!(await audio.canDecode())) throw typeof AudioDecoder === "undefined"
+      ? new DiagnosticError("This browser doesn’t support the audio editing Studio needs. On iPhone and iPad, use Safari with iOS or iPadOS 26 or later.", "unsupported_audio_decoder")
+      : new DiagnosticError("This browser can’t decode this clip’s audio.", "unsupported_codec");
     const waveform = Array.from({ length: WAVEFORM_BINS }, () => 0);
     const levels = createSilenceLevels(duration);
     for await (const { buffer, timestamp } of new AudioBufferSink(audio).buffers()) {
@@ -80,7 +81,7 @@ export function sourceFilmstrip(file: File, duration: number, signal: AbortSigna
     const times = Array.from({ length: FILMSTRIP_FRAMES }, (_, index) => Math.max(pictureStart, origin + index / FILMSTRIP_FRAMES * duration));
     for await (const frame of new VideoSampleSink(video).samplesAtTimestamps(times)) {
       signal.throwIfAborted();
-      if (frame === null) throw new Error("A video frame could not be decoded.");
+      if (frame === null) throw new DiagnosticError("A video frame could not be decoded.", "no_decodable_picture");
       try {
         const scale = Math.max(120 / video.displayWidth, 68 / video.displayHeight);
         tiles.push(thumbnail(120, 68, 0.65, (context) => frame.draw(context,

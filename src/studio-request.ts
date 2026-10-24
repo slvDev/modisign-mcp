@@ -9,11 +9,13 @@ import { replaceCaptionWords, type CaptionWord } from "../vendor/web/src/lib/cap
 import { newSfx, sfxProblem, type SfxAnchor, type SfxOwners, type StudioSfx } from "../vendor/web/src/lib/studio-sfx.js";
 import { AUTO_EVENTS, AUTO_INTENSITIES, AUTO_TITLE_SOUNDS, DEFAULT_AUTO_SFX_OPTIONS, autoSfxAction, buildAutoSfx, type AutoSfxOptions } from "../vendor/web/src/lib/studio-sfx-auto.js";
 import { ToolError } from "./errors.js";
+import { DEFAULT_GROUPING, GROUPING_LIMITS, SCATTER_GROUPING, SCATTER_INTENSITIES, SCATTER_SAFE_ZONES, CAPTION_STYLE_IDS, isCaptionGrouping, isCaptionScatter, lineOverrideProblem, type CaptionLineOverride, type CaptionScatter, type CaptionStyleId } from "../vendor/web/src/lib/studio-project.js";
+import { captionLines, expressiveStyle, groupingOf, patchedLine, phraseKey, phrasesFor } from "../vendor/web/src/lib/caption-lines.js";
 
-export type EditClip = TrackPlacement & { path: string; crop?: Crop; place?: Place; in?: number; out?: number; fit?: "fill" | "fit"; zoom?: number; pan_x?: number; pan_y?: number; slow_zoom?: boolean; volume?: number; mute?: boolean; fade_in?: number; fade_out?: number; punch_ins?: { at: number; length: number; zoom: 110 | 125 | 140 }[]; motion?: LayerMotion };
+export type EditClip = TrackPlacement & { path: string; crop?: Crop; place?: Place; in?: number; out?: number; fit?: "fill" | "fit"; zoom?: number; pan_x?: number; pan_y?: number; slow_zoom?: boolean; volume?: number; mute?: boolean; fade_in?: number; fade_out?: number; punch_ins?: { at: number; length: number; zoom: 110 | 125 | 140 }[]; motion?: LayerMotion; captions_enabled?: boolean };
 export type EditReveal = Partial<Omit<TitleReveal, "rect">> & { rect?: Partial<TitleReveal["rect"]> };
 export type EditText = { text: string; timestamp?: TextLabel["timestamp"]; clip?: number; start?: number; duration?: number; motion?: LayerMotion; reveal?: EditReveal; occlusion?: { clip?: number; threshold?: number; feather?: number; smoothing?: number } } & Partial<TextStyle>;
-export type EditRapidIntro = { clips: number[]; labels: { clip: number; text: string }[]; frames_per_clip?: RapidFrames; timestamp?: RapidIntroInput["timestamp"]; mute_teasers?: boolean };
+export type EditRapidIntro = { clips: number[]; labels: { clip: number; text: string }[]; frames_per_clip?: RapidFrames; timestamp?: RapidIntroInput["timestamp"]; mute_teasers?: boolean; captions_on_teasers?: boolean };
 export type EditSfxAnchor = { kind: "title-enter"; text: number } | { kind: "transition"; after_clip: number } | { kind: "overlay-cue"; overlay: number; cue: string };
 export type EditSfx = { asset: string; start?: number; anchor?: EditSfxAnchor; offset?: number; in?: number; out?: number; gain?: number; mute?: boolean; fade_in?: number; fade_out?: number };
 export type EditAutoSfx = { events?: AutoSfxOptions["events"]; seed?: number; intensity?: AutoSfxOptions["intensity"]; title_sound?: AutoSfxOptions["titleSound"] };
@@ -23,7 +25,12 @@ export type EditInput = { clips: EditClip[]; transitions?: { after_clip: number;
   aspect: typeof STUDIO_ASPECTS[number]; quality?: "1080p" | "720p"; output_path?: string };
 export type MediaInfo = { kind: "video" | "photo"; duration: number; width: number; height: number };
 export type WordStyleRequest = { clip: number; from: number; to: number; appearance: WordAppearance };
-export type EditCaptions = CaptionPlacement & { style: CaptionSettings["style"]; mix?: { preset: CaptionMix["preset"]; seed?: number; palette?: string[] }; word_styles?: WordStyleRequest[]; corrections?: { from: string; to: string }[] };
+type EditMix = { preset: CaptionMix["preset"]; seed?: number; palette?: string[] };
+export type LineSelectorRequest = { clip: number; from: number; to: number; x?: number; y?: number; size?: number; rotation?: number; style?: CaptionStyleId; mix?: EditMix };
+export type EditCaptions = CaptionPlacement & { style: CaptionSettings["style"]; mix?: EditMix; grouping?: { max_words: number; max_characters: number; max_duration: number; pause: number };
+  scatter?: { seed: number; safe_zone: CaptionScatter["safeZone"]; intensity: CaptionScatter["intensity"]; styles: CaptionStyleId[] };
+  lines?: LineSelectorRequest[]; word_styles?: WordStyleRequest[]; corrections?: { from: string; to: string }[] };
+export const MAX_LINE_SELECTORS = 100;
 function invalid(field: string, allowed: string): never { throw new ToolError(`Invalid ${field}: ${allowed}.`, { field, allowed }); }
 // Footage keys are source seconds, title and overlay keys local seconds; the shared validator names the channel, row and bound.
 function validateMotion(motion: unknown, field: string, time: { min: number; max: number }) {
@@ -38,11 +45,12 @@ export function validateEdit(input: EditInput) {
   if (!STUDIO_ASPECTS.includes(input.aspect)) invalid("aspect", STUDIO_ASPECTS.join(", "));
   if (!Array.isArray(input.clips) || input.clips.length === 0 || input.clips.length > MAX_STUDIO_CLIPS) invalid("clips", "1–300 local clips");
   for (const [index, clip] of input.clips.entries()) {
-    keys(clip, ["path", "track", "start", "crop", "place", "in", "out", "fit", "zoom", "pan_x", "pan_y", "slow_zoom", "volume", "mute", "fade_in", "fade_out", "punch_ins", "motion"], `clips.${index}`);
+    keys(clip, ["path", "track", "start", "crop", "place", "in", "out", "fit", "zoom", "pan_x", "pan_y", "slow_zoom", "volume", "mute", "fade_in", "fade_out", "punch_ins", "motion", "captions_enabled"], `clips.${index}`);
     const field = `clips.${index}`;
     if (clip.track !== "v1" && clip.track !== "v2") invalid(`${field}.track`, "required v1 or v2");
     if (clip.track === "v1" && Object.hasOwn(clip, "start")) invalid(`${field}.start`, "forbidden on v1; clips play in request order");
     if (clip.track === "v2" && (!Number.isFinite(clip.start) || clip.start < 0)) invalid(`${field}.start`, "required nonnegative seconds on v2");
+    if (clip.captions_enabled !== undefined && (typeof clip.captions_enabled !== "boolean" || clip.track === "v2" || input.captions === undefined)) invalid(`${field}.captions_enabled`, "true or false, on a v1 clip, in a request with captions");
     if (clip.crop !== undefined && !isCrop(clip.crop)) invalid(`${field}.crop`, "top/right/bottom/left percentages 0–95, opposite sides totaling at most 95, no other fields");
     if (clip.place !== undefined && !isPlace(clip.place)) invalid(`${field}.place`, "a named mode only, or custom with normalized x/y/width/height contained in the output and dimensions at least 0.05");
     if (typeof clip.path !== "string" || clip.path.trim() === "") invalid(`clips.${index}.path`, "a local path");
@@ -64,18 +72,27 @@ export function validateEdit(input: EditInput) {
   if (input.quality !== undefined && input.quality !== "1080p" && input.quality !== "720p") invalid("quality", "1080p or 720p");
   if (input.output_path !== undefined && typeof input.output_path !== "string") invalid("output_path", "an absolute MP4 path");
   if (input.captions !== undefined) {
-    keys(input.captions, ["style", "position", "size", "mix", "word_styles", "corrections"], "captions");
-    const { style, position, size, mix, word_styles: wordStyles, corrections } = input.captions;
+    keys(input.captions, ["style", "position", "size", "mix", "grouping", "scatter", "lines", "word_styles", "corrections"], "captions");
+    const { style, mix, lines, word_styles: wordStyles, corrections } = input.captions;
     if (mix !== undefined && style !== "mixed") invalid("captions.mix", "only with style mixed");
-    if (!isCaptionSettings({ style, position, size, ...(style === "mixed" ? { mix: requestMix(mix) } : {}) })) invalid("captions", "a supported style, upper/center/lower position and s/m/l size");
+    if (!isCaptionSettings(captionSettings(input.captions))) invalid("captions", "a supported style, upper/center/lower position and s/m/l size");
     if (wordStyles !== undefined) {
       if (!Array.isArray(wordStyles) || wordStyles.length > 100) invalid("captions.word_styles", "at most 100 word ranges");
       for (const [index, item] of wordStyles.entries()) {
         const field = `captions.word_styles.${index}`;
         keys(item, ["clip", "from", "to", "appearance"], field);
-        if (!Number.isInteger(item.clip) || item.clip < 0 || item.clip >= input.clips.length || input.clips[item.clip].track !== "v1") invalid(`${field}.clip`, "a request index of a v1 clip");
-        if (!Number.isFinite(item.from) || !Number.isFinite(item.to) || item.from < 0 || item.to > MAX_STUDIO_DURATION || item.from >= item.to) invalid(field, "from and to in source seconds, 0 to 180, from before to");
+        checkSelector(item, field, input.clips);
         if (!isWordAppearance(item.appearance)) invalid(`${field}.appearance`, APPEARANCE_RULE);
+      }
+    }
+    if (lines !== undefined) {
+      if (!Array.isArray(lines) || lines.length > MAX_LINE_SELECTORS) invalid("captions.lines", `at most ${MAX_LINE_SELECTORS} line selectors`);
+      for (const [index, item] of lines.entries()) {
+        const field = `captions.lines.${index}`;
+        keys(item, ["clip", "from", "to", ...LINE_FIELDS], field);
+        checkSelector(item, field, input.clips);
+        const problem = lineOverrideProblem(lineRow(item, field));
+        if (problem !== null) invalid(problem.field === "" ? field : `${field}.${problem.field}`, problem.message.replace(/\.$/, ""));
       }
     }
     if (corrections !== undefined) {
@@ -105,6 +122,7 @@ export function validateEdit(input: EditInput) {
   const layers = [input.clips, input.texts === undefined ? [] : input.texts, input.overlays === undefined ? [] : input.overlays].flat();
   if (layers.reduce((sum, layer) => sum + motionKeyCount(layer.motion), 0) > MAX_MOTION_KEYS) invalid("motion", `at most ${MAX_MOTION_KEYS} keys across all clips, titles and overlays`);
   if (input.rapid_intro !== undefined) validateRapidIntro(input.rapid_intro, input.clips);
+  if (input.rapid_intro !== undefined && input.rapid_intro.captions_on_teasers !== undefined && input.captions === undefined) invalid("rapid_intro.captions_on_teasers", "only in a request with captions");
   if (input.sfx !== undefined) {
     if (!Array.isArray(input.sfx) || input.sfx.length > MAX_STUDIO_SFX) invalid("sfx", `at most ${MAX_STUDIO_SFX} sounds`);
     for (const [index, request] of input.sfx.entries()) validateSfx(request, `sfx.${index}`, input);
@@ -145,7 +163,7 @@ export function mapClips(input: EditInput, sources: MediaInfo[]): StudioClip[] {
     return { ...spatial, ...(request.track === "v1" ? { track: "v1" as const } : { track: "v2" as const, start: request.start }), id: `clip-${index}`, mediaId: `media-${index}`, label: request.path.split(/[\\/]/).at(-1)!, kind: source.kind,
       duration: source.kind === "photo" ? end - start : source.duration, inPoint: source.kind === "photo" ? 0 : start,
       outPoint: source.kind === "photo" ? end - start : end, ...(source.kind === "photo" ? { sourceStart: start } : {}),
-      settings: { ...settings, ...(source.kind === "photo" ? { slowZoom: request.slow_zoom === true } : {}) }, punchIns, ...(request.motion === undefined ? {} : { motion: request.motion }) };
+      settings: { ...settings, ...(source.kind === "photo" ? { slowZoom: request.slow_zoom === true } : {}) }, punchIns, ...(request.motion === undefined ? {} : { motion: request.motion }), ...(request.captions_enabled === false ? { captionEnabled: false as const } : {}) };
   });
   for (const transition of input.transitions === undefined ? [] : input.transitions) {
     const outgoing = clips[transition.after_clip];
@@ -168,14 +186,51 @@ export function mapClips(input: EditInput, sources: MediaInfo[]): StudioClip[] {
 }
 const APPEARANCE_RULE = `at least one of font (${Object.entries(CAPTION_FONTS).map(([id, font]) => `${id}: weights ${font.weights.join("/")}${font.italic ? ", italic" : ""}`).join("; ")}; weight and italic need font), fill and highlight as #RRGGBB (highlight false removes one), tracking −0.08 to 0.3, leading 1 to 2, underline true or false`;
 // A mix with no seed or palette takes the shared showcase seed and the preset's own palette, so one request is reproducible.
-function requestMix(mix: unknown): CaptionMix {
+function requestMix(mix: unknown, field: string): CaptionMix {
   if (mix === undefined) return newMix(DEFAULT_MIX_PRESET, DEFAULT_MIX_SEED);
-  keys(mix, ["preset", "seed", "palette"], "captions.mix");
+  keys(mix, ["preset", "seed", "palette"], field);
   const { preset, seed, palette } = mix;
-  if (!CAPTION_MIX_PRESETS.some((id) => id === preset)) invalid("captions.mix.preset", CAPTION_MIX_PRESETS.join(" or "));
+  if (!CAPTION_MIX_PRESETS.some((id) => id === preset)) invalid(`${field}.preset`, CAPTION_MIX_PRESETS.join(" or "));
   const recipe = newMix(preset as CaptionMix["preset"], seed === undefined ? DEFAULT_MIX_SEED : seed as number, palette === undefined ? CAPTION_MIXES[preset as CaptionMix["preset"]].palette : palette as string[]);
-  if (!isCaptionMix(recipe)) invalid("captions.mix", "a seed from 0 to 4294967295 and a palette of 2–4 #RRGGBB colors");
+  if (!isCaptionMix(recipe)) invalid(field, "a seed from 0 to 4294967295 and a palette of 2–4 #RRGGBB colors");
   return recipe;
+}
+const wholeNumber = ({ min, max }: { min: number; max: number }) => `a whole number from ${min} to ${max}`;
+const secondsBetween = ({ min, max }: { min: number; max: number }) => `seconds from ${min} to ${max}`;
+const GROUPING_NAMES = { max_words: "maxWords", max_characters: "maxCharacters", max_duration: "maxDuration", pause: "pause" };
+const GROUPING_RULES = { max_words: wholeNumber(GROUPING_LIMITS.maxWords), max_characters: wholeNumber(GROUPING_LIMITS.maxCharacters), max_duration: secondsBetween(GROUPING_LIMITS.maxDuration), pause: secondsBetween(GROUPING_LIMITS.pause) };
+const SCATTER_NAMES = { seed: "seed", safe_zone: "safeZone", intensity: "intensity", styles: "styles" };
+const SCATTER_RULES = { seed: "a whole number from 0 to 4294967295", safe_zone: SCATTER_SAFE_ZONES.join(" or "), intensity: SCATTER_INTENSITIES.join(" or "), styles: `one or more different styles from ${CAPTION_STYLE_IDS.join(", ")}` };
+const SCATTER_PROBE: CaptionScatter = { seed: 0, safeZone: SCATTER_SAFE_ZONES[0], intensity: SCATTER_INTENSITIES[0], styles: ["clean"] };
+// Every field is required and checked by the shared validator with the others held valid, so the error names exactly the failing field.
+function requestRecord<T extends object>(value: unknown, field: string, names: Record<string, string>, probe: T, valid: (value: unknown) => boolean, rules: Record<string, string>): T {
+  keys(value, Object.keys(names), field);
+  const built: Record<string, unknown> = {};
+  for (const [name, key] of Object.entries(names)) {
+    if (!valid({ ...probe, [key]: value[name] })) invalid(`${field}.${name}`, rules[name]);
+    built[key] = value[name];
+  }
+  return built as T;
+}
+// Scatter without its own grouping uses the Scatter phrase preset; every other request keeps the standard grouping.
+export function captionSettings(captions: EditCaptions): CaptionSettings {
+  const { style, position, size, mix, grouping, scatter } = captions;
+  return { style, position, size, ...(style === "mixed" ? { mix: requestMix(mix, "captions.mix") } : {}),
+    ...(grouping !== undefined ? { grouping: requestRecord(grouping, "captions.grouping", GROUPING_NAMES, { ...DEFAULT_GROUPING }, isCaptionGrouping, GROUPING_RULES) } : scatter !== undefined ? { grouping: { ...SCATTER_GROUPING } } : {}),
+    ...(scatter === undefined ? {} : { scatter: requestRecord(scatter, "captions.scatter", SCATTER_NAMES, SCATTER_PROBE, isCaptionScatter, SCATTER_RULES) }) };
+}
+const LINE_FIELDS = ["x", "y", "size", "rotation", "style", "mix"];
+// A selector names a v1 clip by request index and a nonempty source-second range, like word_styles.
+function checkSelector(item: { clip: number; from: number; to: number }, field: string, clips: EditClip[]) {
+  if (!v1Index(item.clip, clips)) invalid(`${field}.clip`, "a request index of a v1 clip");
+  if (!Number.isFinite(item.from) || !Number.isFinite(item.to) || item.from < 0 || item.to > MAX_STUDIO_DURATION || item.from >= item.to) invalid(field, "from and to in source seconds, 0 to 180, from before to");
+}
+// The sparse patch one line selector applies; Mixed carries its own recipe, built like the global one.
+function lineRow(item: LineSelectorRequest, field: string): CaptionLineOverride {
+  const { clip: _clip, from: _from, to: _to, mix, ...patch } = item;
+  if (patch.style === "mixed") return { ...patch, mix: requestMix(mix, `${field}.mix`) };
+  if (mix !== undefined) invalid(`${field}.mix`, "only with style mixed");
+  return patch;
 }
 const FACE_RULE = `font, weight and italic must name a bundled face (${Object.entries(CAPTION_FONTS).map(([id, font]) => `${id}: weights ${font.weights.join("/")}${font.italic ? ", italic" : ""}`).join("; ")}); omitted weight is ${DEFAULT_TEXT_STYLE.weight} and omitted italic is false`;
 const STYLE_RULES: Record<string, string> = { fill: "a #RRGGBB color", size: Object.keys(TEXT_SIZES).join(", "), x: "a fraction from 0 to 1", y: "a fraction from 0 to 1", backing: "true or false" };
@@ -229,12 +284,13 @@ function completeOcclusion(request: unknown, field: string, bound: unknown, clip
   return { clipId: `clip-${owner}`, ...occlusion };
 }
 function validateRapidIntro(request: unknown, clips: EditClip[]) {
-  keys(request, ["clips", "frames_per_clip", "labels", "timestamp", "mute_teasers"], "rapid_intro");
+  keys(request, ["clips", "frames_per_clip", "labels", "timestamp", "mute_teasers", "captions_on_teasers"], "rapid_intro");
   const { clips: chosen, labels, frames_per_clip: frames, timestamp, mute_teasers: mute } = request;
   if (!Array.isArray(chosen) || chosen.length < RAPID_CLIPS.min || chosen.length > RAPID_CLIPS.max || !chosen.every((index) => v1Index(index, clips)) || new Set(chosen).size !== chosen.length) invalid("rapid_intro.clips", `${RAPID_CLIPS.min} to ${RAPID_CLIPS.max} unique request indices of v1 clips, in teaser order`);
   if (frames !== undefined && !RAPID_FRAMES.some((count) => count === frames)) invalid("rapid_intro.frames_per_clip", RAPID_FRAMES.join(", "));
   if (timestamp !== undefined && !RAPID_TIMESTAMPS.some((kind) => kind === timestamp)) invalid("rapid_intro.timestamp", RAPID_TIMESTAMPS.join(", "));
   if (mute !== undefined && typeof mute !== "boolean") invalid("rapid_intro.mute_teasers", "true or false");
+  if (request.captions_on_teasers !== undefined && typeof request.captions_on_teasers !== "boolean") invalid("rapid_intro.captions_on_teasers", "true or false");
   if (!Array.isArray(labels) || labels.length !== chosen.length) invalid("rapid_intro.labels", "one label for each chosen clip");
   const named = new Set<unknown>();
   for (const [index, label] of labels.entries()) {
@@ -360,9 +416,9 @@ export function mapTexts(input: EditInput, clips: StudioClip[]): StudioText[] {
 export function editDocument(input: EditInput, media: StudioMedia[]): StudioState {
   const clips = mapClips(input, media.map((item) => ({ ...item.source, kind: item.kind, duration: item.kind === "photo" ? 3 : item.source.duration })));
   return { ...initialStudioState, aspect: input.aspect, aspectChosen: true, media, clips, texts: mapTexts(input, clips),
-    captions: input.captions === undefined ? null : { style: input.captions.style, position: input.captions.position, size: input.captions.size, ...(input.captions.style === "mixed" ? { mix: requestMix(input.captions.mix) } : {}) } };
+    captions: input.captions === undefined ? null : captionSettings(input.captions) };
 }
-const RAPID_DEFAULTS = { frames: 5, timestamp: "source", muteTeasers: true } as const;
+const RAPID_DEFAULTS = { frames: 5, timestamp: "source", muteTeasers: true, captionTeasers: false } as const;
 const stampOf = (request: EditRapidIntro) => request.timestamp === undefined ? RAPID_DEFAULTS.timestamp : request.timestamp;
 // What does not depend on silence removal: a photo has no source stamp. The duration, count and size checks run on the real result.
 export function checkRapidIntroStructure(request: EditRapidIntro, clips: StudioState["clips"]) {
@@ -378,23 +434,36 @@ export function applyRapidIntro(state: StudioState, request: EditRapidIntro): St
   });
   const next = studioReducer(state, { type: "rapid-intro", entries, labelIds: entries.map(() => `label-${crypto.randomUUID()}`),
     frames: request.frames_per_clip === undefined ? RAPID_DEFAULTS.frames : request.frames_per_clip, timestamp: stampOf(request),
-    muteTeasers: request.mute_teasers === undefined ? RAPID_DEFAULTS.muteTeasers : request.mute_teasers });
+    muteTeasers: request.mute_teasers === undefined ? RAPID_DEFAULTS.muteTeasers : request.mute_teasers, captionTeasers: request.captions_on_teasers === undefined ? RAPID_DEFAULTS.captionTeasers : request.captions_on_teasers });
   if (next.clips === state.clips) throw new ToolError(`Rapid intro was not built: ${next.message}`, { field: "rapid_intro" });
   return next;
 }
 // Selectors name a request v1 clip and source seconds; a word is chosen by its midpoint within the clip's own trim, after transcription and corrections.
-// Per clip, every interval between selector boundaries gets its covering selectors merged in request order (the reducer's own reduction); the request is customized when any merged look has an effect, before any word is known.
-export function selectorsCustomized(selectors: WordStyleRequest[]) {
-  return selectors.some((selector) => {
-    const edges = [...new Set(selectors.filter((other) => other.clip === selector.clip).flatMap((other) => [other.from, other.to]))].sort((a, b) => a - b);
-    return edges.slice(0, -1).some((from, index) => {
-      const covering = selectors.filter((other) => other.clip === selector.clip && other.from <= from && other.to >= edges[index + 1]);
-      if (covering.length === 0) return false;
-      let look: WordAppearance | undefined;
-      for (const other of covering) look = patchedLook(look, other.appearance);
-      return look !== undefined && isEffectiveAppearance(look);
+// Per clip, every interval between selector boundaries has its covering selectors merged in request order (the reducer's own reduction), before any word or phrase is known.
+function mergedRegions<S extends { clip: number; from: number; to: number }, V>(selectors: S[], merge: (merged: V | undefined, selector: S) => V | undefined): (V | undefined)[] {
+  return [...new Set(selectors.map((selector) => selector.clip))].flatMap((clip) => {
+    const own = selectors.filter((selector) => selector.clip === clip);
+    const edges = [...new Set(own.flatMap((selector) => [selector.from, selector.to]))].sort((a, b) => a - b);
+    return edges.slice(0, -1).flatMap((from, index) => {
+      const covering = own.filter((selector) => selector.from <= from && selector.to >= edges[index + 1]);
+      return covering.length === 0 ? [] : [covering.reduce<V | undefined>((merged, selector) => merge(merged, selector), undefined)];
     });
   });
+}
+export function selectorsCustomized(selectors: WordStyleRequest[]) {
+  return mergedRegions<WordStyleRequest, WordAppearance>(selectors, (look, selector) => patchedLook(look, selector.appearance)).some((look) => look !== undefined && isEffectiveAppearance(look));
+}
+// The one classification before any speech is read: expressive styles of the merged line selectors, effective word styles and an expressive Scatter pool, by the rule Studio's captionCustomized uses. Geometry alone is free.
+export function captionsCustomized(captions: EditCaptions) {
+  const expressive = (style: CaptionStyleId) => expressiveStyle(style, captions.style);
+  const lineLooks = captions.lines === undefined ? [] : mergedRegions<LineSelectorRequest, CaptionLineOverride>(captions.lines, (merged, selector) => {
+    const next = patchedLine(merged, lineRow(selector, "captions.lines"));
+    if (typeof next === "string") throw new Error(next);
+    return next;
+  });
+  return (captions.word_styles !== undefined && selectorsCustomized(captions.word_styles))
+    || lineLooks.some((line) => line !== undefined && line.style !== undefined && expressive(line.style))
+    || (captions.scatter !== undefined && captions.scatter.styles.some(expressive));
 }
 export function applyWordStyles(state: StudioState, selectors: WordStyleRequest[]) {
   return selectors.reduce((next, selector, index) => {
@@ -408,6 +477,52 @@ export function applyWordStyles(state: StudioState, selectors: WordStyleRequest[
     if (ids.length === 0) invalid(field, `spoken words between source seconds ${selector.from} and ${selector.to} of that clip`);
     return studioReducer(next, { type: "style-caption-words", mediaId: clip.mediaId, wordIds: ids, patch: selector.appearance });
   }, state);
+}
+export type LineMatch = { mediaId: string; phraseIds: string[] };
+// A selector addresses whole phrases: those whose source midpoint, (first word start + last word end) / 2, lies in [from, to) inside the clip's trim. Rows apply in request order through the reducer's own line patch.
+export function applyLineSelectors(state: StudioState, selectors: LineSelectorRequest[]): { state: StudioState; matches: LineMatch[] } {
+  const { captions } = state;
+  if (captions === null) throw new Error("Caption settings are missing");
+  const matches: LineMatch[] = [];
+  let next = state;
+  for (const [index, selector] of selectors.entries()) {
+    const field = `captions.lines.${index}`;
+    const clip = next.clips.find((item) => item.id === `clip-${selector.clip}`);
+    if (clip === undefined || clip.track !== "v1" || clip.kind !== "video" || clip.mediaId === null) invalid(`${field}.clip`, "a v1 video clip");
+    const { mediaId } = clip;
+    const transcript = next.transcripts[mediaId];
+    const from = Math.max(selector.from, clip.inPoint);
+    const to = Math.min(selector.to, clip.outPoint);
+    const noMatch: () => never = () => invalid(field, `a range whose spoken phrases have their middle between source seconds ${selector.from} and ${selector.to} of that clip`);
+    if (transcript === undefined) noMatch();
+    const wordOf = (id: string) => {
+      const word = transcript.find((item) => item.id === id);
+      if (word === undefined) throw new Error("A caption phrase has a missing word");
+      return word;
+    };
+    const phraseIds = phrasesFor(next, mediaId, groupingOf(captions)).filter(({ wordIds }) => {
+      const middle = (wordOf(wordIds[0]).start + wordOf(wordIds[wordIds.length - 1]).end) / 2;
+      return middle >= from && middle < to;
+    }).map((phrase) => phrase.id);
+    if (phraseIds.length === 0) noMatch();
+    const patch = lineRow(selector, field);
+    for (const phraseId of phraseIds) {
+      const attempt = studioReducer({ ...next, message: null }, { type: "set-caption-line", mediaId, phraseId, patch });
+      if (attempt.message !== null) invalid(field, attempt.message.replace(/\.$/, ""));
+      next = attempt;
+    }
+    matches.push({ mediaId, phraseIds });
+  }
+  return { state: next, matches };
+}
+// After pause removal and the rapid intro every selector must still reach a visible phrase; one that does not is an error, never silently dropped.
+export function checkVisibleLines(state: StudioState, matches: LineMatch[]) {
+  const { captions } = state;
+  if (captions === null) throw new Error("Caption settings are missing");
+  const visible = new Set(captionLines(state, captions).map((line) => phraseKey(line.owner.mediaId, line.owner.phraseId)));
+  for (const [index, match] of matches.entries()) {
+    if (!match.phraseIds.some((phraseId) => visible.has(phraseKey(match.mediaId, phraseId)))) invalid(`captions.lines.${index}`, "a range that still has a visible caption line after pause removal, the rapid intro and captions_enabled");
+  }
 }
 export function correctTranscript(words: CaptionWord[], corrections: { from: string; to: string }[]) {
   for (const correction of corrections) {

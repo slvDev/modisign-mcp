@@ -12,15 +12,19 @@ export type RapidFrames = typeof RAPID_FRAMES[number];
 // One entry per chosen V1 clip, in teaser order: a teaser is the first `frames` frames of the clip's current trim, and its description labels the clip in the body.
 export type RapidIntroInput = {
   entries: { clipId: string; teaserId: string; text: string }[];
-  frames: RapidFrames; timestamp: typeof RAPID_TIMESTAMPS[number]; muteTeasers: boolean;
+  frames: RapidFrames; timestamp: typeof RAPID_TIMESTAMPS[number]; muteTeasers: boolean; captionTeasers: boolean;
   labelIds: string[];
 };
 const LABEL_STYLE = { ...DEFAULT_TEXT_STYLE, y: 0.82, backing: true };
 export const PHOTO_STAMP_MESSAGE = "A photo has no source timestamp. Use the timeline time or none.";
 
+const fitsTeaser = (clip: StudioClip, frames: number) => clip.outPoint - clip.inPoint >= frames / 30 - 1e-6;
+// V1 clips long enough for a teaser of this many frames, in timeline order.
+export const rapidEligible = (clips: readonly StudioClip[], frames: number) => clips.filter((clip) => clip.track === "v1" && fitsTeaser(clip, frames));
+
 // Teasers go first on V1; everything already placed on an absolute time (V2, overlays, titles) moves later by the same amount.
 export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay[]; texts: StudioText[]; sfx: StudioSfx[] }, input: RapidIntroInput) {
-  const { entries, frames, timestamp, muteTeasers, labelIds } = input;
+  const { entries, frames, timestamp, muteTeasers, captionTeasers, labelIds } = input;
   if (entries.length < RAPID_CLIPS.min || entries.length > RAPID_CLIPS.max) return `Choose ${RAPID_CLIPS.min} to ${RAPID_CLIPS.max} clips.`;
   if (!RAPID_FRAMES.includes(frames)) return "A teaser cut is 3, 4, 5 or 6 frames.";
   if (new Set(entries.map((entry) => entry.clipId)).size !== entries.length) return "Choose each clip once.";
@@ -31,12 +35,12 @@ export function rapidIntro(state: { clips: StudioClip[]; overlays: StudioOverlay
   for (const [position, entry] of entries.entries()) {
     const body = state.clips.find((clip) => clip.id === entry.clipId);
     if (body === undefined || body.track !== "v1") return "Rapid intro uses clips on V1.";
-    if (body.outPoint - body.inPoint < length - 1e-6) return `“${body.label}” is shorter than ${frames} frames. Choose a shorter teaser.`;
+    if (!fitsTeaser(body, frames)) return `“${body.label}” is shorter than ${frames} frames. Choose a shorter teaser.`;
     if (timestamp === "source" && body.kind === "photo") return PHOTO_STAMP_MESSAGE;
     if (entry.text.length > MAX_TEXT_LENGTH) return TEXT_ERROR;
     teasers.push({ ...body, id: entry.teaserId, transition: undefined, punchIns: undefined, motion: undefined,
       ...(body.kind === "photo" ? { duration: length, inPoint: 0, outPoint: length, sourceStart: clipSourceStart(body) } : { outPoint: body.inPoint + length }),
-      settings: { ...body.settings, fadeIn: 0, fadeOut: 0, muted: muteTeasers ? true : body.settings.muted } });
+      settings: { ...body.settings, fadeIn: 0, fadeOut: 0, muted: muteTeasers ? true : body.settings.muted }, ...(captionTeasers ? {} : { captionEnabled: false as const }) });
     const label: StudioText = { ...LABEL_STYLE, id: labelIds[position], text: entry.text, ...(timestamp === "none" ? {} : { timestamp }), timing: { clipId: body.id } };
     if (label.text !== "" || timestamp !== "none") labels.push(label);
   }

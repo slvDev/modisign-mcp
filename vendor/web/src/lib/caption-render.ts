@@ -1,5 +1,5 @@
 // generated from the Modisign monorepo, do not edit
-import { captionDisplayText, captionStyle, resolveLook, type CaptionLine, type CaptionPlacement, type CaptionStyleId } from "./captions";
+import { captionDisplayText, captionStyle, resolveLook, type CaptionLine } from "./captions";
 import { captionLayout, glyphOffsets, italicFace, type CaptionFace, type CaptionLayoutWord, type CaptionRect } from "./caption-layout";
 import type { CaptionFont } from "./caption-mix";
 
@@ -14,9 +14,8 @@ function captionFontFamily(font: CaptionFont) {
   return family;
 }
 export const fontString = (face: CaptionFace, size: number) => `${face.italic ? "italic " : ""}${face.weight} ${size}px ${captionFontFamily(face.font)}`;
-// Every face the lines draw, with the displayed text it must cover: the style's own face first, then each word's.
-function usedFaces(lines: CaptionLine[], styleId: CaptionStyleId) {
-  const style = captionStyle(styleId);
+// Every face the lines draw, with the displayed text it must cover: each line's style face first, then each word's.
+function usedFaces(lines: readonly CaptionLine[]) {
   const faces = new Map<string, { face: CaptionFace; texts: Set<string> }>();
   const add = (face: CaptionFace, text: string) => {
     const key = fontString(face, 48);
@@ -24,16 +23,19 @@ function usedFaces(lines: CaptionLine[], styleId: CaptionStyleId) {
     if (entry === undefined) faces.set(key, { face, texts: new Set([text]) });
     else entry.texts.add(text);
   };
-  for (const word of lines.flatMap((line) => line.words)) {
-    const { font, weight, italic } = resolveLook(style, word.look);
-    const face = { font, weight, italic };
-    const text = captionDisplayText(word.text, style.casing);
-    add(face, text);
-    if (style.activeItalic) add(italicFace(face), text);
+  for (const line of lines) {
+    const style = captionStyle(line.treatment.style);
+    for (const word of line.words) {
+      const { font, weight, italic } = resolveLook(style, word.look);
+      const face = { font, weight, italic };
+      const text = captionDisplayText(word.text, style.casing);
+      add(face, text);
+      if (style.activeItalic) add(italicFace(face), text);
+    }
+    // Word spacing is always measured in the style's own face.
+    const base = { font: style.font, weight: style.weight, italic: false };
+    if (!faces.has(fontString(base, 48))) add(base, " ");
   }
-  // Word spacing is always measured in the style's own face.
-  const base = { font: style.font, weight: style.weight, italic: false };
-  if (!faces.has(fontString(base, 48))) add(base, " ");
   return [...faces.values()].map(({ face, texts }) => ({ face, text: [...texts].join(" ") }));
 }
 // Loads every face with its displayed text and fails when one is not usable, so no measurement or draw falls back to another face.
@@ -44,7 +46,7 @@ export async function loadFaces(faces: { face: CaptionFace; text: string }[]) {
     if (!document.fonts.check(font, text)) throw new Error(`The caption font ${font} is unavailable`);
   }));
 }
-export const loadCaptionFonts = (lines: CaptionLine[], styleId: CaptionStyleId) => loadFaces(usedFaces(lines, styleId));
+export const loadCaptionFonts = (lines: readonly CaptionLine[]) => loadFaces(usedFaces(lines));
 function roundedBox(ctx: CanvasRenderingContext2D, rect: CaptionRect, padding: number, color: string, radius: number) {
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.roundRect(rect.x - padding, rect.y - padding, rect.width + padding * 2, rect.height + padding * 2, radius); ctx.fill();
@@ -64,11 +66,11 @@ export function transparentLayer(ctx: CanvasRenderingContext2D, width: number, h
   layer.context.clearRect(0, 0, width, height);
   return layer;
 }
-export function drawCaptions(ctx: CanvasRenderingContext2D, lines: CaptionLine[], styleId: CaptionStyleId, time: number, width: number, height: number, placement: CaptionPlacement) {
+export function drawCaptions(ctx: CanvasRenderingContext2D, lines: readonly CaptionLine[], time: number, width: number, height: number) {
   const line = lines.find((line) => time >= line.start && time < line.end);
   if (line === undefined) return;
   const layer = transparentLayer(ctx, width, height);
-  drawCaptionLine(layer.context, line, styleId, time, width, height, placement);
+  drawCaptionLine(layer.context, line, time, width, height);
   ctx.drawImage(layer.canvas, 0, 0);
 }
 // Tracked words paint each glyph at the offsets layout measured, so width, centring, underline and highlight agree with the ink.
@@ -79,17 +81,26 @@ function paintText(ctx: CanvasRenderingContext2D, mode: "fillText" | "strokeText
   glyphs.forEach((glyph, index) => ctx[mode](glyph, -word.textWidth / 2 + offsets[index], 0));
   ctx.textAlign = "center";
 }
-function drawCaptionLine(ctx: CanvasRenderingContext2D, line: CaptionLine, styleId: CaptionStyleId, time: number, width: number, height: number, placement: CaptionPlacement) {
-  const style = captionStyle(styleId);
-  const measure = (text: string, size: number, face: CaptionFace) => { ctx.font = fontString(face, size); return ctx.measureText(text).width; };
-  ctx.save();
-  const layout = captionLayout(line, styleId, time, width, height, placement, measure);
-  const { size } = layout;
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
-  if (style.background === "line") {
-    const boxWidth = Math.max(...layout.rows.map((row) => { const first = layout.words[row[0]]; const last = layout.words[row[row.length - 1]]; return last.x + last.width - first.x; })) + size * 0.8;
-    roundedBox(ctx, { x: (width - boxWidth) / 2, y: layout.box.y, width: boxWidth, height: layout.box.height }, 0, "rgba(0,0,0,0.8)", size * 0.22);
+const measurerOf = (ctx: CanvasRenderingContext2D) => (text: string, size: number, face: CaptionFace) => { ctx.font = fontString(face, size); return ctx.measureText(text).width; };
+let scratch: CanvasRenderingContext2D | null = null;
+// The layout the painter uses for a line, measured on a scratch canvas with the loaded faces: handles and hit tests read the same polygon the monitor and export draw.
+export function measuredCaption(line: CaptionLine, time: number, width: number, height: number) {
+  if (scratch === null) {
+    const context = document.createElement("canvas").getContext("2d");
+    if (context === null) throw new Error("Caption measuring canvas is unavailable");
+    scratch = context;
   }
+  return captionLayout(line, time, width, height, measurerOf(scratch));
+}
+function drawCaptionLine(ctx: CanvasRenderingContext2D, line: CaptionLine, time: number, width: number, height: number) {
+  const style = captionStyle(line.treatment.style);
+  const measure = measurerOf(ctx);
+  ctx.save();
+  const layout = captionLayout(line, time, width, height, measure);
+  const { size } = layout;
+  ctx.translate(layout.center.x, layout.center.y); ctx.rotate(layout.rotation); ctx.translate(-layout.center.x, -layout.center.y);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+  if (layout.backing !== null) roundedBox(ctx, layout.backing, 0, "rgba(0,0,0,0.8)", size * 0.22);
   if (layout.highlight !== null) roundedBox(ctx, layout.highlight, size * 0.18, "#FFD60A", size * 0.2);
   for (const word of layout.words) {
     if (word.text === "") continue;
